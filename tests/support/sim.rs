@@ -90,6 +90,30 @@ pub fn basis(flat: &Flat, input: &str) -> BTreeMap<String, Amp> {
         assert!(c == b'0' || c == b'1');
         bits[*i] = c == b'1';
     }
+    // Exact basis fast path for permutation circuits: no amplitude arithmetic
+    // or state-vector allocation is needed for X and SWAP permutations.
+    if flat.gates.iter().all(|g| matches!(g.gate, G::X | G::Swap)) {
+        for g in &flat.gates {
+            if g.controls.iter().all(|(q, p)| bits[*q] == *p) {
+                match g.gate {
+                    G::X => bits[g.targets[0]] = !bits[g.targets[0]],
+                    G::Swap => bits.swap(g.targets[0], g.targets[1]),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        assert!(
+            flat.workspace.iter().all(|q| !bits[*q]),
+            "dirty workspace after permutation"
+        );
+        return BTreeMap::from([(
+            flat.interface
+                .iter()
+                .map(|q| if bits[*q] { '1' } else { '0' })
+                .collect(),
+            Amp::one(),
+        )]);
+    }
     let mut state = BTreeMap::from([(bits, Amp::one())]);
     for g in &flat.gates {
         state = apply(state, g);

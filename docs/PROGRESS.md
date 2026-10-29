@@ -116,3 +116,20 @@ Divergences: none (19 actions / 930 basis comparisons).
   `$` prefix. This resolved a lowering rejection, not an oracle divergence.
 - M1 epic and all five child beads closed; next bead `bennett-circuits-pk3`.
   No pushes; no external repository edits or interpreter source imports.
+
+## 2026-10-29 — milestone 2 implementation in progress
+
+- Claimed `bennett-circuits-pk3`; split construction, checker and action
+  specialisation into child beads `.1`–`.3`.
+- Red: oracle test failed to compile because `oracle::specialise` was absent.
+  Green: literal inc8 construction passes B=0/2/3/4 with arbitrary target
+  and fault values and exact workspace restoration (144 tuples).
+- Added gate-level Boolean expansion, bounded dispatch, assignment/capture
+  histories, commit and complete gate-prefix reversal. Expansion scratch is
+  retained as private history until reversal; no certificate claim is made.
+- Array storage omits addresses that cannot belong to a live allocation
+  under the fixed heap budget; dispatch retains actual ISA addresses. Stack
+  storage is bounded by the specialised stack limit. This removes no valid
+  access: inherent inrange/call flags guard every access.
+- Oracle corpus differential coverage, nested rows, full static checker and
+  action specialisation remain in progress; milestone 2 is not complete.
