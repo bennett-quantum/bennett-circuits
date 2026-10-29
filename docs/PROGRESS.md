@@ -54,8 +54,18 @@ only; reference binary used solely through its CLI in tests.
 
 - [x] M1.1 `docs/PLAN.md`
 - [x] M1.2 loader + `check` agreement
-- [ ] M1.3 IR + action lowering
+- [x] M1.3 IR + action lowering
 - [ ] M1.4 OpenQASM 3 export + round-trip
 - [ ] M1.5 differential harness vs `run-action`
 
 Divergences: none yet.
+
+## 2026-10-29 — resumed IR/lowering
+
+- Retained and reviewed the prior agent's uncommitted hierarchical IR,
+  lowering and naive placement. All 13 fixture actions lower and flatten.
+- Red-green regressions fixed call-cycle detection, indexed MCX controls,
+  lexical entry-time local regions (including zero-trip loops and forward
+  uses), structured predicate-stack balance, and milestone error spelling.
+- Nine lowering tests pass; calls and copy/load cleanup pairs remain explicit.
+  Oracle specialisation and non-literal parameters remain explicit M2 errors.

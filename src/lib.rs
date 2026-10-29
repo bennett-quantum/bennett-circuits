@@ -3,7 +3,10 @@
 //! `bennett-isa-spec`). See `docs/PLAN.md` for the architecture and
 //! milestone scope.
 
+pub mod flatten;
+pub mod ir;
 pub mod json;
+pub mod lower;
 pub mod object;
 pub mod sha256;
 
