@@ -239,3 +239,24 @@ partial implementation. These are M2 work, not scope removed or moved to M3.
   closed. pk3.2 (full checker) and pk3 remain in progress. **Milestone 2 has not
   met its full acceptance criteria**; M3 follows only after those gaps close.
 - No pushes, no edits outside this repository, reference interpreter CLI only.
+
+## 2026-10-29 — resumed checker: CFG cleanup and broader citation audit
+
+- Red-green §5.5 worklist analysis now follows direct CFG edges, maintains
+  distinct reaching invocation identities across joins and converges on
+  balanced loops. Cleanup must have a matching call on every incoming path.
+  Writes through another oracle/permutation call invalidate pending input
+  versions; recursive lproc memory effects are inspected transitively.
+- Explicit M2 errors remain for overlapping invocations at the same cyclic
+  call point and interprocedural indirect-jump cleanup. General symbolic
+  actions, handle joins, certificate-backed borrow proofs and nested schemas
+  are still open. This checkpoint does not complete M2.
+- Expanded differential checks to all **42 conformance object files**:
+  verdict and diagnostic rule citation agree. Fixed diagnostics for version
+  rejection (§1) and illegal lifted opcodes (§4.8). Existing 14 fixture/spec
+  objects + 3 corruptions + 31 F verdict comparisons remain covered.
+- Three CFG regressions and the expanded corpus test passed (7 checker tests).
+  Suite A baseline is **0 pass / 21 fail / 0 unavailable**: run-cc/reverse CLI
+  is absent. Suite B baseline is under investigation: literal expansion for
+  B=1000 consumed >8 GB on depth-limit before completing; stopped that child
+  process to avoid exhausting the host. No expected result was altered.

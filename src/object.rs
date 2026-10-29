@@ -361,7 +361,7 @@ fn parse_header(line: &str) -> Result<Header> {
     ] {
         if v != ISA_VERSION {
             bail!(
-                "object: unsupported {k}={v}; this implementation is ISA {ISA_VERSION} (0.9 is drafted, not accepted; §9.1)"
+                "object: unsupported {k}={v}; this implementation is ISA {ISA_VERSION} (0.9 is drafted, not accepted; §1; §9.1)"
             );
         }
     }

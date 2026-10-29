@@ -90,3 +90,91 @@ fn a_cell_version_advance_closes_load_cleanup_even_if_restored() {
     let error = Object::parse(&text).unwrap().hash().unwrap_err();
     assert!(error.0.contains("§6.2"), "{error}");
 }
+
+fn nested_object(body: &str) -> Object {
+    let path = "/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/tests/fixtures/nested.bisa";
+    let text = std::fs::read_to_string(path).unwrap();
+    let old = "lift.oracle_call @inc8 tk (x) r fr () ()\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nlift.retval r";
+    Object::parse(&text.replace(old, body)).unwrap()
+}
+#[test]
+fn matched_cleanup_crosses_cfg_edges_and_handles_loop_fixed_points() {
+    for body in [
+        "lift.oracle_call @inc8 tk (x) r fr () ()\nqjump ^cleanup\n^cleanup():\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nlift.retval r",
+        "qjump ^again\n^again():\nlift.oracle_call @inc8 tk (x) r fr () ()\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nqbranch p ^again ^done\n^done():\nlift.retval r",
+        "qbranch p ^left ^right\n^left():\nlift.oracle_call @inc8 tk (x) r fr () ()\nqjump ^cleanup\n^right():\nlift.oracle_call @inc8 tk (x) r fr () ()\nqjump ^cleanup\n^cleanup():\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nlift.retval r",
+    ] {
+        nested_object(body).hash().unwrap();
+    }
+}
+#[test]
+fn matched_cleanup_requires_a_call_on_every_incoming_path() {
+    let o = nested_object(
+        "qbranch p ^left ^cleanup\n^left():\nlift.oracle_call @inc8 tk (x) r fr () ()\nqjump ^cleanup\n^cleanup():\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nlift.retval r",
+    );
+    let e = o.hash().unwrap_err();
+    assert!(
+        e.0.contains("§5.5") && !e.0.contains("unimplemented"),
+        "{e}"
+    );
+}
+#[test]
+fn matched_cleanup_rejects_input_write_through_another_call() {
+    let mut o = nested_object(
+        "lift.oracle_call @inc8 tk (r) zero fr () ()\nlift.oracle_call @inc8 tk (x) r p () ()\nlift.oracle_uncall @inc8 tk (r) zero fr () ()\nlift.retval r",
+    );
+    // Use well-typed output slots; all changes remain semantic hash tests.
+    let f = o.functions.iter_mut().find(|f| f.name == "cancel").unwrap();
+    f.regs.iter_mut().find(|p| p.name == "zero").unwrap().ty =
+        bennett_circuits::object::Type::Reg(8);
+    f.regs.iter_mut().find(|p| p.name == "p").unwrap().ty = bennett_circuits::object::Type::Reg(4);
+    let e = o.hash().unwrap_err();
+    assert!(e.0.contains("§5.5"), "{e}");
+}
+
+#[test]
+fn all_conformance_objects_agree_in_verdict_and_rule_citation() {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let dir = base.join("bennett-isa-spec/conformance/cases/objects");
+    let mut count = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let p = entry.unwrap().path();
+        if p.extension().is_none_or(|x| x != "bisa") {
+            continue;
+        }
+        let ours = Object::parse(&std::fs::read_to_string(&p).unwrap()).and_then(|o| o.check());
+        let reference = Command::new(
+            base.join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"),
+        )
+        .arg("check")
+        .arg(&p)
+        .output()
+        .unwrap();
+        assert_eq!(
+            ours.is_ok(),
+            reference.status.success(),
+            "{}: ours={ours:?}; ref={}",
+            p.display(),
+            String::from_utf8_lossy(&reference.stderr)
+        );
+        if let Err(e) = ours {
+            let diagnostic = String::from_utf8(reference.stderr).unwrap();
+            let rule = diagnostic
+                .split_once('§')
+                .expect("reference rule citation")
+                .1
+                .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+                .next()
+                .unwrap()
+                .trim_end_matches('.');
+            assert!(
+                e.0.contains(&format!("§{rule}")),
+                "{}: ours={e}; ref={diagnostic}",
+                p.display()
+            );
+        }
+        count += 1;
+    }
+    assert_eq!(count, 42);
+    eprintln!("STATIC HARNESS: {count} conformance objects agree in verdict and rule citation");
+}

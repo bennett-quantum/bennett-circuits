@@ -179,7 +179,7 @@ fn schema(f: &Function, o: &Object) -> Result<()> {
                 "add" | "sub" | "mul" | "and" | "or" | "xor" | "shl" | "lshr" | "ashr" | "udiv"
                 | "urem" | "sdiv" | "srem" => (2, 1),
                 _ => bail!(
-                    "checker: {} illegal in lifted body (§4.2 exact-permutation only)",
+                    "checker: {} illegal in lifted body (§4.8; §4.2 exact-permutation only)",
                     i.opcode
                 ),
             };
@@ -375,7 +375,7 @@ fn schema(f: &Function, o: &Object) -> Result<()> {
             }
         }
     }
-    matched_cleanup(f)?;
+    matched_cleanup(o, f)?;
     Ok(())
 }
 fn decimal_bits(s: &str) -> u32 {
@@ -523,41 +523,139 @@ fn lifted_call(o: &Object, f: &Function, i: &Instr, names: &BTreeMap<String, Typ
     }
     Ok(())
 }
-fn matched_cleanup(f: &Function) -> Result<()> {
-    if all(f).iter().any(|i| i.opcode == "lift.oracle_uncall")
-        && (f.blocks.len() != 1 || all(f).iter().any(|i| i.opcode == "qjumpr"))
-    {
-        bail!("unimplemented: §5.5 control-flow matched cleanup analysis (milestone 2)")
+/// May-write summary for lifted calls. Recursive lproc SCCs reach a finite
+/// fixed point because the effect is the single "may write memory" bit.
+fn writes_memory(o: &Object, name: &str, visiting: &mut BTreeSet<String>) -> bool {
+    if !visiting.insert(name.into()) {
+        return false;
     }
-
-    // Path-sensitive callers with indirect jumps need the complete reaching-
-    // invocation analysis. Until implemented, refuse that rule explicitly.
-    let mut pending: Vec<(&Instr, BTreeSet<String>)> = Vec::new();
-    for i in all(f) {
+    let Some(f) = o.function(name) else {
+        return true;
+    };
+    all(f).iter().any(|i| {
+        i.opcode.starts_with("lift.store.")
+            || matches!(i.opcode.as_str(), "lift.alloc" | "lift.free")
+            || i.opcode == "lift.call"
+                && i.operands
+                    .iter()
+                    .any(|a| matches!(a, Operand::Sym(n) if writes_memory(o, n, visiting)))
+            || i.opcode == "lift.perm_call"
+                && match i.operands.first() {
+                    Some(Operand::Sym(n)) => o
+                        .symbol(n)
+                        .map(|s| &s.signature)
+                        .or_else(|| {
+                            o.imports
+                                .iter()
+                                .find(|s| s.name == *n)
+                                .map(|s| &s.signature)
+                        })
+                        .and_then(|s| s.get("mem"))
+                        .and_then(|v| v.as_array())
+                        .is_none_or(|ms| {
+                            ms.iter()
+                                .any(|m| m.get("role").and_then(|v| v.as_str()) == Some("mut"))
+                        }),
+                    _ => true,
+                }
+    })
+}
+fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
+    if !all(f).iter().any(|i| i.opcode == "lift.oracle_uncall") {
+        return Ok(());
+    }
+    let rows = f.blocks.iter().flat_map(|b| &b.instrs).collect::<Vec<_>>();
+    let mut labels = BTreeMap::new();
+    let mut offset = 0;
+    for b in &f.blocks {
+        labels.insert(b.name.as_str(), offset);
+        offset += b.instrs.len();
+    }
+    // A state retains the computing program point, so reaching two different
+    // invocations through a join never conflates their dynamic identities.
+    // Separate path states preserve correlations at joins; balanced loops
+    // converge to the identical incoming state.
+    type State = BTreeMap<usize, bool>; // call point -> invalidated read version
+    let mut work = vec![(0usize, State::new())];
+    let mut seen = BTreeSet::new();
+    while let Some((pc, mut pending)) = work.pop() {
+        if pc >= rows.len() || !seen.insert((pc, pending.clone())) {
+            continue;
+        }
+        let i = rows[pc];
         if i.opcode == "lift.oracle_uncall" {
-            let Some(pos) = pending.iter().rposition(|(p, _)| p.operands == i.operands) else {
-                bail!("checker: unmatched lifted oracle cleanup (§5.5)")
-            };
-            if !pending[pos].1.is_empty() {
-                bail!("checker: lifted oracle inputs changed before cleanup (§5.5)")
+            let pos = pending
+                .keys()
+                .rev()
+                .find(|p| rows[**p].operands == i.operands)
+                .copied()
+                .ok_or_else(|| {
+                    err("checker: unmatched lifted oracle cleanup on an incoming path (§5.5)")
+                })?;
+            if pending[&pos] {
+                bail!("checker: lifted oracle read version changed before cleanup (§5.5)");
             }
-            pending.remove(pos);
-        } else if i.opcode == "lift.oracle_call" {
-            pending.push((i, BTreeSet::new()));
-        } else {
-            for (p, changed) in &mut pending {
-                let Operand::List(ins) = &p.operands[2] else {
-                    unreachable!()
-                };
-                for n in &i.lhs {
-                    if ins.contains(n) {
-                        changed.insert(n.clone());
+            pending.remove(&pos);
+        }
+        let mut written = i.lhs.iter().cloned().collect::<BTreeSet<_>>();
+        if matches!(i.opcode.as_str(), "lift.oracle_call" | "lift.oracle_uncall") {
+            for k in [3, 4] {
+                written.insert(opname(&i.operands[k])?.into());
+            }
+        }
+        if i.opcode == "lift.perm_call"
+            && let Operand::List(ns) = &i.operands[1]
+        {
+            written.extend(ns.iter().cloned());
+        }
+        let memory = i.opcode.starts_with("lift.store.")
+            || i.opcode == "lift.call"
+                && match &i.operands[0] {
+                    Operand::Sym(n) => writes_memory(o, n, &mut BTreeSet::new()),
+                    _ => true,
+                }
+            || i.opcode == "lift.perm_call" && writes_memory(o, &f.name, &mut BTreeSet::new());
+        for (p, dirty) in &mut pending {
+            let call = rows[*p];
+            let Operand::List(ins) = &call.operands[2] else {
+                unreachable!()
+            };
+            let Operand::List(mems) = &call.operands[5] else {
+                unreachable!()
+            };
+            *dirty |= ins.iter().any(|n| written.contains(n)) || memory && !mems.is_empty();
+        }
+        if i.opcode == "lift.oracle_call" {
+            if pending.insert(pc, false).is_some() {
+                bail!(
+                    "unimplemented: §5.5 overlapping dynamic invocations at a cyclic call point (milestone 2)"
+                );
+            }
+        }
+        let mut successors = Vec::new();
+        match i.opcode.as_str() {
+            "qjump" | "qbranch" => {
+                for a in &i.operands {
+                    if let Operand::Label(n, _) = a {
+                        successors.push(labels[n.as_str()]);
                     }
                 }
-                if i.opcode.starts_with("lift.store") {
-                    changed.insert("memory".into());
-                }
             }
+            // Every locally addressable row is a possible indirect destination.
+            // Interprocedural indirect jumps need the containing index space.
+            "qjumpr" => {
+                if o.functions.iter().any(|cf| cf.kind == FnKind::Lproc) {
+                    bail!(
+                        "unimplemented: §5.5 interprocedural indirect-jump cleanup (milestone 2)"
+                    );
+                }
+                successors.extend(0..rows.len());
+            }
+            "lift.retval" | "lift.ret" | "fault" => {}
+            _ => successors.push(pc + 1),
+        }
+        for next in successors {
+            work.push((next, pending.clone()));
         }
     }
     Ok(())
