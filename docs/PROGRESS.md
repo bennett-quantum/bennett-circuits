@@ -11,7 +11,7 @@ only; reference binary used solely through its CLI in tests.
   (plus §8/§11 heads for the plan); `bennett-isa-spec/HANDOFF.md`; the
   reference interpreter README (CLI contract). All 13 `.bisa` fixtures read.
 - Verified against the oracle binary before designing against it:
-  `check` accepts all 13 fixtures (`status:"ok"`); `run-action --basis` bit
+  `check` accepts all 12 fixtures (`status:"ok"`); `run-action --basis` bit
   order is interface order (mut bundles, in bundles, mem cells; first char =
   first wire; bundle value little-endian) — confirmed by hand on `flip`
   (basis 0110 → 1110), `image` (0x35 XOR cell 0xad = 152), `while3`,
@@ -34,10 +34,26 @@ only; reference binary used solely through its CLI in tests.
 - `SPEC_VERSIONS.toml`: skeleton 0.3 pins replaced with 0.8 (the spec this
   milestone implements; sub-versions per ISA spec §8–§13).
 
+## 2026-10-29 — loader + check (M1.2)
+
+- `src/sha256.rs`, `src/json.rs` (JCS subset, integer numbers only),
+  `src/object.rs` (§16 parser, §9.1 derived-signature validation, §9.2
+  identity with SCC handling, `check`/`hash`), `src/main.rs` CLI.
+- `tests/check_agreement.rs` green: verdict + `object_hash` + every
+  interface/closure hash agree with `bennett-isa-ref check` on all 12
+  fixtures and both §16.3 examples (extracted from the spec text itself);
+  the `inc8` envelope matches the §16.3 printed bytes; corrupted hash/body/
+  signature mutations are rejected by both.
+- Surprise resolved by hash evidence: `classical.bisa`'s `unknown_effect`
+  uses an undeclared device (`effect missing.op`). That is legal — §17
+  item 3 makes it `FAULT_EFFECT_UNMODELLED` at run time — so its envelope
+  simply has no 5c entry for it. First implementation errored; skipping
+  undeclared entries reproduces the stored hash exactly.
+
 ## Status
 
 - [x] M1.1 `docs/PLAN.md`
-- [ ] M1.2 loader + `check` agreement
+- [x] M1.2 loader + `check` agreement
 - [ ] M1.3 IR + action lowering
 - [ ] M1.4 OpenQASM 3 export + round-trip
 - [ ] M1.5 differential harness vs `run-action`
