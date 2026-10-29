@@ -5,6 +5,8 @@
 
 pub mod flatten;
 pub mod ir;
+mod ir_codec;
+pub mod qasm;
 pub mod json;
 pub mod lower;
 pub mod object;

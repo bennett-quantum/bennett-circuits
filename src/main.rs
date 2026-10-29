@@ -63,6 +63,13 @@ fn run(args: &[String]) -> Result<()> {
             println!("{}", report_json(&report).to_jcs());
             Ok(())
         }
+        Some("export-qasm") if args.len() == 3 => {
+            let obj = load(&args[1])?;
+            obj.check()?;
+            let p = bennett_circuits::lower::lower_program(&obj, &args[2])?;
+            print!("{}", bennett_circuits::qasm::export(&p)?);
+            Ok(())
+        }
         Some("hash") if args.len() == 2 => {
             let report = load(&args[1])?.hash()?;
             println!("{}", report_json(&report).to_jcs());

@@ -55,7 +55,7 @@ only; reference binary used solely through its CLI in tests.
 - [x] M1.1 `docs/PLAN.md`
 - [x] M1.2 loader + `check` agreement
 - [x] M1.3 IR + action lowering
-- [ ] M1.4 OpenQASM 3 export + round-trip
+- [x] M1.4 OpenQASM 3 export + round-trip
 - [ ] M1.5 differential harness vs `run-action`
 
 Divergences: none yet.
@@ -69,3 +69,15 @@ Divergences: none yet.
   uses), structured predicate-stack balance, and milestone error spelling.
 - Nine lowering tests pass; calls and copy/load cleanup pairs remain explicit.
   Oracle specialisation and non-literal parameters remain explicit M2 errors.
+
+## 2026-10-29 — OpenQASM 3
+
+- Hierarchical gate definitions, explicit auxiliary operands, stdgates,
+  ctrl/negctrl/inv modifiers, and CLI `export-qasm` with identity checking.
+- Versioned `bc-ir-1` comments preserve roles, allocation classes, geometry,
+  call hierarchy and copy/load pairs. The IR parser rejects executable text
+  that disagrees with the metadata; a separate executable parser ignores the
+  IR comment and parses/expands real QASM gate statements for simulation.
+- Round trips and independent gate-text flattening agree on all 13 actions;
+  executable mutation and CLI export tests pass. Zero-wire identities use
+  one inert sentinel qubit because QASM gate declarations need an operand.
