@@ -264,7 +264,10 @@ impl Object {
             let span_start = i;
             i += 1;
             let Some(name) = lines.get(i).and_then(|l| l.strip_prefix("section ")) else {
-                bail!("object: expected 'section <name>' at line {}", i + 1);
+                bail!(
+                    "object: expected 'section <name>' at line {} (§16.1)",
+                    i + 1
+                );
             };
             let name = name.to_string();
             let Some(order) = SECTION_ORDER.iter().position(|s| *s == name) else {
@@ -358,7 +361,7 @@ fn parse_header(line: &str) -> Result<Header> {
     ] {
         if v != ISA_VERSION {
             bail!(
-                "object: unsupported {k}={v}; this implementation is ISA {ISA_VERSION} (0.9 is drafted, not accepted)"
+                "object: unsupported {k}={v}; this implementation is ISA {ISA_VERSION} (0.9 is drafted, not accepted; §9.1)"
             );
         }
     }
@@ -537,6 +540,9 @@ fn tokenise(line: &str) -> Result<Vec<String>> {
     let mut i = 0usize;
     while i < bytes.len() {
         if bytes[i] == b' ' {
+            if i == 0 || bytes[i - 1] == b' ' {
+                bail!("object: tokens require exactly one space (§16.1)");
+            }
             i += 1;
             continue;
         }
@@ -1640,7 +1646,7 @@ impl Object {
         Ok(done)
     }
 
-    fn identity(&self) -> Result<BTreeMap<String, SymbolHashes>> {
+    pub(crate) fn identity(&self) -> Result<BTreeMap<String, SymbolHashes>> {
         let interface = self.compute_hashes(false)?;
         let closure = self.compute_hashes(true)?;
         let mut out = BTreeMap::new();
@@ -1751,6 +1757,7 @@ impl Object {
     /// interface hash. Mirrors the reference `check` report shape.
     pub fn check(&self) -> Result<CheckReport> {
         self.validate()?;
+        crate::checker::validate(self)?;
         let symbols = self.identity()?;
         for s in &self.symbols {
             let computed = &symbols[&s.name].interface_hash;
@@ -1780,6 +1787,7 @@ impl Object {
     /// Identities without comparing stored hashes (the reference `hash`).
     pub fn hash(&self) -> Result<CheckReport> {
         self.validate()?;
+        crate::checker::validate(self)?;
         let symbols = self.identity()?;
         let unresolved_imports: Vec<String> = self.imports.iter().map(|i| i.name.clone()).collect();
         Ok(CheckReport {
@@ -1848,7 +1856,7 @@ fn replace_refs(
 
 /// Tarjan SCC over defined symbols; members of each SCC sorted by name
 /// bytewise (§9.2). Iteration uses sorted names for determinism.
-fn strongly_connected(
+pub(crate) fn strongly_connected(
     refs_of: &BTreeMap<String, Vec<String>>,
     defined: &BTreeSet<&str>,
 ) -> Vec<Vec<String>> {

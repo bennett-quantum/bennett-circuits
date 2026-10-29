@@ -3,6 +3,7 @@
 //! `bennett-isa-spec`). See `docs/PLAN.md` for the architecture and
 //! milestone scope.
 
+mod checker;
 pub mod flatten;
 pub mod ir;
 mod ir_codec;

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Compile the published harness unchanged; keep every artifact in this repo.
+set -euo pipefail
+unset DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS BROWSER
+repo="$(dirname "$(dirname "$(realpath "$0")")")"
+spec="$(dirname "$repo")/bennett-isa-spec"
+export TMPDIR="$repo/.tmp"
+export CARGO_MANIFEST_DIR="$repo"
+export CARGO_PKG_VERSION=0.0.0
+mkdir -p "$repo/.tmp/conformance"
+rustc --edition=2021 --crate-name bennett_isa_conformance --crate-type rlib "$spec/conformance/src/lib.rs" --out-dir "$repo/.tmp/conformance"
+rustc --edition=2021 "$spec/conformance/src/main.rs" --extern "bennett_isa_conformance=$repo/.tmp/conformance/libbennett_isa_conformance.rlib" -o "$repo/.tmp/conformance/harness"
+cargo build --offline --manifest-path "$repo/Cargo.toml"
+exec "$repo/.tmp/conformance/harness" --cases "$spec/conformance/cases" --suite F --bin "$repo/target/debug/bennett-circuits" "$@"

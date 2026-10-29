@@ -102,10 +102,10 @@ impl Build {
                 Bit::C(false) => return,
                 Bit::C(true) => {}
                 Bit::Q(q, p) => {
-                    if let Some(old) = controls.insert(q.clone(), *p) {
-                        if old != *p {
-                            return;
-                        }
+                    if let Some(old) = controls.insert(q.clone(), *p)
+                        && old != *p
+                    {
+                        return;
                     }
                 }
             }
@@ -364,6 +364,7 @@ struct Machine<'a> {
     loc: BTreeMap<(String, String), Word>,
     pseudo: BTreeMap<String, Word>,
     args: BTreeMap<String, Argument>,
+    callees: Vec<Circuit>,
     pc: Word,
     pc2: Word,
     faulted: Word,
@@ -421,14 +422,13 @@ impl<'a> Machine<'a> {
         if let Some(v) = l.get("globals").and_then(|v| v.get(n)) {
             return number(v, "base");
         }
-        if f == 0 {
-            if let Some(v) = l
+        if f == 0
+            && let Some(v) = l
                 .get("interface_regions")
                 .and_then(|v| v.get(&self.root.name))
                 .and_then(|v| v.get(n))
-            {
-                return number(v, "base");
-            }
+        {
+            return number(v, "base");
         }
         bail!("oracle: invalid address @{n} (§4.2)")
     }
@@ -454,9 +454,9 @@ impl<'a> Machine<'a> {
         let mut out = constant(0, w);
         for (i, cell) in arr.iter().enumerate() {
             let at = self.b.eq(idx, &constant(i as u128, idx.len()));
-            for j in 0..w {
+            for (j, value) in out.iter_mut().enumerate() {
                 let bit = self.b.and(&at, cell.get(j).unwrap_or(&Bit::C(false)));
-                out[j] = self.b.xor(&out[j], &bit)
+                *value = self.b.xor(value, &bit);
             }
         }
         out
@@ -477,17 +477,23 @@ impl<'a> Machine<'a> {
             self.b.exchange(v, &cell[..v.len()].to_vec(), &cs);
         }
     }
-    fn memory_read(&mut self,idx:&Word)->Word {
-        let mut out=constant(0,8);
-        for (addr,cell) in self.mem_addresses.iter().zip(&self.mem) {
-            let at=self.b.eq(idx,&constant(*addr as u128,idx.len()));
-            for j in 0..8 {let v=self.b.and(&at,&cell[j]);out[j]=self.b.xor(&out[j],&v);}
-        }out
+    fn memory_read(&mut self, idx: &Word) -> Word {
+        let mut out = constant(0, 8);
+        for (addr, cell) in self.mem_addresses.iter().zip(&self.mem) {
+            let at = self.b.eq(idx, &constant(*addr as u128, idx.len()));
+            for j in 0..8 {
+                let v = self.b.and(&at, &cell[j]);
+                out[j] = self.b.xor(&out[j], &v);
+            }
+        }
+        out
     }
-    fn memory_exchange(&mut self,idx:&Word,v:&Word,cs:&[Bit]) {
-        for (addr,cell) in self.mem_addresses.iter().zip(&self.mem) {
-            let at=self.b.eq(idx,&constant(*addr as u128,idx.len()));let mut controls=cs.to_vec();controls.push(at);
-            self.b.exchange(v,cell,&controls);
+    fn memory_exchange(&mut self, idx: &Word, v: &Word, cs: &[Bit]) {
+        for (addr, cell) in self.mem_addresses.iter().zip(&self.mem) {
+            let at = self.b.eq(idx, &constant(*addr as u128, idx.len()));
+            let mut controls = cs.to_vec();
+            controls.push(at);
+            self.b.exchange(v, cell, &controls);
         }
     }
     fn offset(&mut self, base: &Word, k: usize) -> Word {
@@ -502,13 +508,21 @@ impl<'a> Machine<'a> {
             .copied()
             .ok_or_else(|| Error(format!("oracle: missing label ^{n}")))
     }
-    fn row(&mut self, k: usize, at: &Bit, flag: &Bit, succ: &Word) -> Result<()> {
+    fn row(&mut self, k: usize, at: &Bit, flag: &Bit, succ: &Word) -> Result<Word> {
         let (fi, i) = self.rows[k];
         let op = i.opcode.strip_prefix("lift.").unwrap_or(&i.opcode);
         let operands = &i.operands;
         let mut next = constant((k + 1) as u128, self.p);
         let halt = constant(self.rows.len() as u128, self.p);
         let mut bad = Bit::C(false);
+        let mut recorded = false;
+        macro_rules! capture_flag {
+            () => {
+                self.b.flip(flag, &[at.clone(), bad.clone()]);
+                recorded = true;
+            };
+        }
+
         let mut code = constant(0, self.code.len());
         let mut values = Vec::new();
         let d = if let Some(n) = i.lhs.first() {
@@ -518,6 +532,98 @@ impl<'a> Machine<'a> {
         };
         let w = d.as_ref().map_or(0, Vec::len);
         match op {
+            "perm_call" => {
+                let Operand::Sym(name) = &operands[0] else {
+                    bail!("oracle: perm_call needs symbol")
+                };
+
+                let mut actuals = Vec::new();
+                for operand in &operands[1..3] {
+                    let Operand::List(names) = operand else {
+                        bail!("oracle: perm_call needs lists")
+                    };
+                    for n in names {
+                        actuals.push(self.read(fi, &Operand::Name(n.clone()))?);
+                    }
+                }
+                let Operand::List(mems) = &operands[3] else {
+                    bail!("oracle: perm_call memory list")
+                };
+                for n in mems {
+                    let param = self.root.groups[3]
+                        .iter()
+                        .find(|p| p.name == *n)
+                        .ok_or_else(|| Error("oracle: invalid perm_call memory region".into()))?;
+                    let Type::Region(a, w) = param.ty else {
+                        unreachable!()
+                    };
+                    actuals.push(refs(n, ((1u64 << a) * u64::from(w)) as u32));
+                }
+                let Operand::List(args) = &operands[4] else {
+                    bail!("oracle: perm_call argument list")
+                };
+                let arguments =
+                    args.iter()
+                        .map(|n| {
+                            self.args.get(n).cloned().ok_or_else(|| {
+                                Error(format!("oracle: unknown classical argument {n}"))
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                let program = crate::lower::lower_program_with_args(self.obj, name, &arguments)?;
+                self.inline_program(&program, &actuals, std::slice::from_ref(at))?;
+            }
+            "oracle_call" | "oracle_uncall" => {
+                let Operand::Sym(name) = &operands[0] else {
+                    bail!("oracle: nested call needs symbol")
+                };
+                let Operand::Name(token) = &operands[1] else {
+                    bail!("oracle: nested call needs token")
+                };
+                let Some(Argument::Token(budget)) = self.args.get(token) else {
+                    bail!("oracle: missing budget token {token}")
+                };
+                let cf = self.obj.function(name).ok_or_else(|| {
+                    Error(format!(
+                        "unimplemented: imported oracle @{name} (milestone 2)"
+                    ))
+                })?;
+                let Operand::List(actual_args) = &operands[6] else {
+                    bail!("oracle: call args list")
+                };
+                let arguments = actual_args
+                    .iter()
+                    .map(|n| {
+                        self.args
+                            .get(n)
+                            .cloned()
+                            .ok_or_else(|| Error(format!("oracle: missing classical argument {n}")))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let program = specialise(self.obj, name, *budget, &arguments)?;
+                let Operand::List(ins) = &operands[2] else {
+                    bail!("oracle: input list")
+                };
+                let Operand::List(mems) = &operands[5] else {
+                    bail!("oracle: memory list")
+                };
+                let mut actuals = vec![self.read(fi, &operands[3])?, self.read(fi, &operands[4])?];
+                for n in ins {
+                    actuals.push(self.read(fi, &Operand::Name(n.clone()))?);
+                }
+                for n in mems {
+                    let param = self.root.groups[3]
+                        .iter()
+                        .find(|p| p.name == *n)
+                        .ok_or_else(|| Error("oracle: invalid nested memory region".into()))?;
+                    let Type::Region(a, w) = param.ty else {
+                        unreachable!()
+                    };
+                    actuals.push(refs(n, ((1u64 << a) * u64::from(w)) as u32));
+                }
+                let _ = cf;
+                self.inline_program(&program, &actuals, std::slice::from_ref(at))?;
+            }
             "mov" => values.push((self.read(fi, &operands[0])?, d.clone().unwrap())),
             "parmov" => {
                 let Operand::List(src) = &operands[0] else {
@@ -559,6 +665,8 @@ impl<'a> Machine<'a> {
                 bad = self.b.or(&lo, &hi);
                 code = constant(4, self.code.len());
                 next = resize(&a, self.p);
+                self.b.copy(&next, succ, std::slice::from_ref(at));
+                next = succ.clone();
             }
             "fault" => {
                 bad = Bit::C(true);
@@ -576,7 +684,7 @@ impl<'a> Machine<'a> {
             }
             "retval" => {
                 let v = self.read(fi, &operands[0])?;
-                self.b.copy(&v, &self.result, &[at.clone()]);
+                self.b.copy(&v, &self.result, std::slice::from_ref(at));
                 next = halt.clone();
             }
             "boundscheck" => {
@@ -598,11 +706,13 @@ impl<'a> Machine<'a> {
                 ));
                 bad = self.b.or(&heap_bad, &tab_bad);
                 code = constant(2, self.code.len());
+                capture_flag!();
                 let cs = vec![at.clone(), not(&bad)];
                 let base = number(self.obj.layout.as_ref().unwrap(), "heap_base")?;
                 let addr = self
                     .b
                     .add(&resize(&self.heap, w), &constant(base as u128, w), false);
+                let wslot = self.b.alloc(w, "alloc_disp_w");
                 let entry = self
                     .b
                     .alloc(2 * self.obj.header.ptr_width as usize + 2, "alloc_entry");
@@ -611,7 +721,14 @@ impl<'a> Machine<'a> {
                 entry_value.push(Bit::C(true));
                 entry_value.push(Bit::C(false));
                 self.b.copy(&entry_value, &entry, &cs);
-                let ptr = self.obj.header.ptr_width as usize;
+                let heap_slot = self.b.alloc(self.heap.len(), "alloc_disp_heap");
+                let atop_slot = self.b.alloc(self.atop.len(), "alloc_disp_atop");
+                let inc = self.b.add(&self.atop, &constant(1, self.atop.len()), false);
+                self.b.copy(&addr, &wslot, &cs);
+                self.b
+                    .copy(&resize(&used, self.heap.len()), &heap_slot, &cs);
+                self.b.copy(&inc, &atop_slot, &cs);
+                self.b.exchange(&wslot, &d.clone().unwrap(), &cs);
                 let table = self.table.clone();
                 for (j, (base, size, live, pinned)) in table.iter().enumerate() {
                     let atj = self.b.eq(&self.atop, &constant(j as u128, self.atop.len()));
@@ -620,16 +737,8 @@ impl<'a> Machine<'a> {
                     let cell = [base.clone(), size.clone(), live.clone(), pinned.clone()].concat();
                     self.b.exchange(&entry, &cell, &controls);
                 }
-                let inc = self.b.add(&self.atop, &constant(1, self.atop.len()), false);
-                self.b.assign(
-                    vec![
-                        (addr, d.clone().unwrap()),
-                        (resize(&used, self.heap.len()), self.heap.clone()),
-                        (inc, self.atop.clone()),
-                    ],
-                    &cs,
-                );
-                assert_eq!(entry.len(), 2 * ptr + 2);
+                self.b.exchange(&heap_slot, &self.heap, &cs);
+                self.b.exchange(&atop_slot, &self.atop, &cs);
             }
             "free" => {
                 let p = self.read(fi, &operands[0])?;
@@ -648,6 +757,7 @@ impl<'a> Machine<'a> {
                 }
                 bad = not(&found);
                 code = constant(7, self.code.len());
+                capture_flag!();
                 for (m, (_, _, live, _)) in matches.iter().zip(&self.table) {
                     self.b.flip(&live[0], &[at.clone(), not(&bad), m.clone()]);
                 }
@@ -682,6 +792,7 @@ impl<'a> Machine<'a> {
                     .ult(&constant(self.budget.depth as u128, dep1.len()), &dep1);
                 bad = self.b.or(&over_sp, &over_depth);
                 code = constant(3, self.code.len());
+                capture_flag!();
                 let cs = vec![at.clone(), not(&bad)];
                 let Operand::List(actuals) = &operands[1] else {
                     bail!("oracle: call args must be list")
@@ -724,9 +835,12 @@ impl<'a> Machine<'a> {
             "ret" => {
                 bad = self.b.eq(&self.depth, &constant(0, self.depth.len()));
                 code = constant(4, self.code.len());
+                capture_flag!();
                 let cs = vec![at.clone(), not(&bad)];
                 let stack = self.stack.clone();
                 next = resize(&self.array_read(&stack, &self.fp.clone(), self.cw), self.p);
+                self.b.copy(&next, succ, std::slice::from_ref(at));
+                next = succ.clone();
                 let v = self.read(fi, &operands[0])?;
                 let slot = self.b.alloc(v.len(), "delivery");
                 self.b.copy(&v, &slot, &cs);
@@ -766,6 +880,7 @@ impl<'a> Machine<'a> {
                 let p = self.read(fi, &operands[0])?;
                 bad = not(&self.inrange(&p, &constant((n / 8) as u128, p.len())));
                 code = constant(7, self.code.len());
+                capture_flag!();
                 let cs = vec![at.clone(), not(&bad)];
                 if op.starts_with("load") {
                     let mut value = Vec::new();
@@ -843,14 +958,65 @@ impl<'a> Machine<'a> {
             }
             _ => bail!("unimplemented: {} (milestone 2)", i.opcode),
         }
-        self.b.flip(flag, &[at.clone(), bad.clone()]);
+        if !recorded {
+            self.b.flip(flag, &[at.clone(), bad.clone()]);
+        }
         if !values.is_empty() {
             self.b.assign(values, &[at.clone(), not(&bad)]);
         }
-        let successor = self.b.muxw(&bad, &halt, &next);
-        self.b.copy(&successor, succ, &[at.clone()]);
-        self.b.copy(&code, &self.code, &[flag.clone()]);
-        self.b.flip(&self.faulted[0], &[flag.clone()]);
+        let successor = self.b.muxw(flag, &halt, &next);
+        self.b.copy(&code, &self.code, &[at.clone(), flag.clone()]);
+        self.b.flip(&self.faulted[0], &[at.clone(), flag.clone()]);
+        Ok(successor)
+    }
+    fn inline_program(&mut self, program: &Program, actuals: &[Word], cs: &[Bit]) -> Result<()> {
+        // Preserve each specialised oracle as a subcircuit. Capturing aliases
+        // in dedicated interface bundles is unnecessary: the call binds bundles.
+        let prefix = format!("$oracle{}", self.b.serial);
+        self.b.serial += 1;
+        let mut circuits = program.circuits.clone();
+        for c in &mut circuits {
+            c.name = format!("{prefix}{}", c.name);
+            for n in &mut c.body {
+                if let Node::Call { callee, .. } = n {
+                    *callee = format!("{prefix}{callee}");
+                }
+            }
+        }
+        let mut args = Vec::new();
+        for word in actuals {
+            let Some(Bit::Q(q, true)) = word.first() else {
+                bail!("unimplemented: non-location nested oracle operand (milestone 2)")
+            };
+            if word
+                .iter()
+                .enumerate()
+                .any(|(i, b)| *b != Bit::Q(QubitRef::new(&q.bundle, i as u32), true))
+            {
+                bail!("oracle: call operand is not a whole bundle")
+            };
+            args.push(q.bundle.clone());
+        }
+        let controls = cs
+            .iter()
+            .filter_map(|b| match b {
+                Bit::C(true) => None,
+                Bit::C(false) => None,
+                Bit::Q(q, p) => Some(Ctrl {
+                    qubit: q.clone(),
+                    positive: *p,
+                }),
+            })
+            .collect();
+        if !cs.contains(&Bit::C(false)) {
+            self.b.c.body.push(Node::Call {
+                callee: format!("{prefix}{}", program.top),
+                adjoint: false,
+                controls,
+                args,
+            });
+        }
+        self.callees.extend(circuits);
         Ok(())
     }
     fn locations(&self, f: usize) -> Vec<Word> {
@@ -877,30 +1043,78 @@ impl<'a> Machine<'a> {
             .position(|w| *w == word)
             .ok_or_else(|| Error("oracle: location id absent".into()))
     }
+    fn possible_successors(&self, k: usize) -> Result<Vec<usize>> {
+        let n = self.rows.len();
+        if k == n {
+            return Ok(vec![n]);
+        }
+        let (fi, i) = self.rows[k];
+        let op = i.opcode.strip_prefix("lift.").unwrap_or(&i.opcode);
+        Ok(match op {
+            "qjump" => vec![self.label(fi, &i.operands[0])?],
+            "qbranch" => vec![
+                self.label(fi, &i.operands[1])?,
+                self.label(fi, &i.operands[2])?,
+            ],
+            "qjumpr" => self
+                .rows
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.0 == fi)
+                .map(|(j, _)| j)
+                .chain(std::iter::once(n))
+                .collect(),
+            "call" => {
+                let Operand::Sym(name) = &i.operands[0] else {
+                    bail!("oracle: call symbol")
+                };
+                vec![
+                    self.rows
+                        .iter()
+                        .position(|(f, _)| self.funcs[*f].name == *name)
+                        .unwrap(),
+                    n,
+                ]
+            }
+            "ret" => (0..=n).collect(),
+            "retval" | "fault" => vec![n],
+            _ => vec![k + 1, n],
+        })
+    }
     fn forward(&mut self) -> Result<()> {
         let n = self.rows.len();
+        let mut possible = BTreeSet::from([0]);
         for _ in 0..self.budget.steps {
             let dispatch = self.b.alloc(n + 1, "dispatch");
-            for (k, at) in dispatch.iter().enumerate() {
-                self.b.equal_xor(&self.pc, k, at)
+            for k in &possible {
+                self.b.equal_xor(&self.pc, *k, &dispatch[*k]);
             }
             let old = self.b.alloc(self.p, "old_pc");
             let flag = self.b.alloc(1, "flag");
             let succ = self.b.alloc(self.p, "succ");
-            for (k, at) in dispatch[..n].iter().enumerate() {
-                self.row(k, at, &flag[0], &succ)?;
+            let mut successors = Vec::new();
+            for k in possible.iter().copied().filter(|k| *k < n) {
+                successors.push((k, self.row(k, &dispatch[k], &flag[0], &succ)?));
             }
-            self.b.copy(&succ, &self.pc2, &[]);
-            self.b.copy(
-                &constant(n as u128, self.p),
-                &self.pc2,
-                &[dispatch[n].clone()],
-            );
+            for (k, next) in successors {
+                self.b
+                    .copy(&next, &self.pc2, std::slice::from_ref(&dispatch[k]));
+            }
+            if possible.contains(&n) {
+                self.b.copy(
+                    &constant(n as u128, self.p),
+                    &self.pc2,
+                    &[dispatch[n].clone()],
+                );
+            }
             self.b.exchange(&self.pc, &self.pc2, &[]);
             self.b.exchange(&self.pc2, &old, &[]);
-            for (k, at) in dispatch.iter().enumerate() {
-                self.b.equal_xor(&old, k, at)
+            let mut next = BTreeSet::new();
+            for k in &possible {
+                self.b.equal_xor(&old, *k, &dispatch[*k]);
+                next.extend(self.possible_successors(*k)?);
             }
+            possible = next;
         }
         Ok(())
     }
@@ -908,17 +1122,15 @@ impl<'a> Machine<'a> {
 /// Specialise one oracle with fixed classical arguments and budget. Interface
 /// order is target, fault, inputs, memory; all of D remains quantum input.
 pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -> Result<Program> {
+    crate::checker::region_graph(obj)?;
     let root = obj
         .function(name)
         .ok_or_else(|| Error(format!("oracle: unknown @{name}")))?;
     if root.kind != FnKind::Oracle {
         bail!("oracle: @{name} is not an oracle")
     }
-    if !root.groups[4].is_empty() || root.groups[4].len() != args.len() {
-        // oracle args are the fifth header group
-        if root.groups[4].len() != args.len() {
-            bail!("oracle: @{name} classical argument arity mismatch")
-        }
+    if root.groups[4].len() != args.len() {
+        bail!("oracle: @{name} classical argument arity mismatch")
     }
     let mut c = Circuit {
         name: name.into(),
@@ -959,7 +1171,7 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
         });
     }
     let mut b = Build { c, serial: 0 };
-    let hashes = obj.hash()?.symbols;
+    let hashes = obj.identity()?;
     let mut reachable = BTreeSet::new();
     let mut queue = vec![root];
     while let Some(f) = queue.pop() {
@@ -981,7 +1193,51 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
         .into_iter()
         .map(|n| obj.function(&n).unwrap())
         .collect::<Vec<_>>();
-    procs.sort_by_key(|f| hashes[&f.name].closure_hash.clone());
+    let refs_of = procs
+        .iter()
+        .map(|f| {
+            (
+                f.name.clone(),
+                f.blocks
+                    .iter()
+                    .flat_map(|b| &b.instrs)
+                    .filter(|i| i.opcode == "lift.call")
+                    .filter_map(|i| {
+                        if let Operand::Sym(n) = &i.operands[0] {
+                            Some(n.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let defined = procs
+        .iter()
+        .map(|f| f.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let groups = crate::object::strongly_connected(&refs_of, &defined);
+    let mut keys = BTreeMap::new();
+    for group in groups {
+        let cyclic = group.len() > 1 || refs_of[&group[0]].contains(&group[0]);
+        let key = if cyclic {
+            let mut bytes = Vec::new();
+            for n in &group {
+                bytes.extend(obj.semantic_envelope(n)?);
+            }
+            crate::sha256::sha256_hex(&bytes)
+        } else {
+            hashes[&group[0]]
+                .closure_hash
+                .clone()
+                .ok_or_else(|| Error("oracle: unresolved lproc closure".into()))?
+        };
+        for (index, n) in group.iter().enumerate() {
+            keys.insert(n.clone(), (key.clone(), index));
+        }
+    }
+    procs.sort_by_key(|f| keys[&f.name].clone());
     let mut funcs = vec![root];
     funcs.extend(procs);
     let mut rows = Vec::new();
@@ -1034,9 +1290,13 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
     }
     let mut arguments = BTreeMap::new();
     for (p, a) in root.groups[4].iter().zip(args) {
+        crate::lower::validate_arg(&p.ty, a)?;
         arguments.insert(p.name.clone(), a.clone());
         if let (Type::Int(w), Argument::Integer(s)) = (&p.ty, a) {
+            crate::lower::validate_arg(&p.ty, a)?;
             pseudo.insert(p.name.clone(), literal(s, *w as usize)?);
+        } else if let (Type::Ptr, Argument::Integer(s)) = (&p.ty, a) {
+            pseudo.insert(p.name.clone(), literal(s, obj.header.ptr_width as usize)?);
         } else if !matches!(
             (&p.ty, a),
             (Type::Token, Argument::Token(_)) | (Type::F64, Argument::Float(_))
@@ -1074,7 +1334,7 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
         atop = b.alloc(at as usize + 1, "atop");
         sp = b.alloc(sc as usize + 1, "sp");
         fp = b.alloc(sc as usize + 1, "fp");
-        let dc = (u64::BITS - budget.depth.saturating_add(1).leading_zeros()).max(1) as usize;
+        let dc = (u128::BITS - (u128::from(budget.depth) + 1).leading_zeros()).max(1) as usize;
         depth = b.alloc(dc, "depth");
         for _ in 0..1usize << at {
             table.push((
@@ -1100,8 +1360,8 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
                     .data_entry(image)
                     .ok_or_else(|| Error(format!("oracle: missing image @{image}")))?;
                 for (j, byte) in data.bytes.iter().enumerate() {
-                    mem_addresses.push(base+j);
-                    let cell=b.alloc(8,"byte");
+                    mem_addresses.push(base + j);
+                    let cell = b.alloc(8, "byte");
                     b.copy(&constant(*byte as u128, 8), &cell, &[]);
                     mem.push(cell);
                 }
@@ -1125,14 +1385,17 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
                 }
                 let cells = m.num_cells() as usize;
                 for j in 0..cells {
-                    mem_addresses.push(base+j);
+                    mem_addresses.push(base + j);
                     mem.push(refs(n, (cells * 8) as u32)[j * 8..j * 8 + 8].to_vec());
                 }
                 pre.push((base, cells));
             }
         }
-        let heap_base=number(layout,"heap_base")? as usize;
-        for j in 0..budget.heap as usize {mem_addresses.push(heap_base+j);mem.push(b.alloc(8,"heap_byte"));}
+        let heap_base = number(layout, "heap_base")? as usize;
+        for j in 0..budget.heap as usize {
+            mem_addresses.push(heap_base + j);
+            mem.push(b.alloc(8, "heap_byte"));
+        }
         if pre.len() > table.len() {
             bail!("oracle: too many allocator pre-entries (§7.2)")
         }
@@ -1156,6 +1419,7 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
         loc,
         pseudo,
         args: arguments,
+        callees: Vec::new(),
         pc,
         pc2,
         faulted,
@@ -1189,7 +1453,11 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
     m.b.equal_xor(&m.pc, m.rows.len(), &halt[0]);
     m.b.c.body.extend(forward.iter().rev().map(Node::adjoint));
     Ok(Program {
-        circuits: vec![m.b.c],
+        circuits: {
+            let mut c = vec![m.b.c];
+            c.extend(m.callees);
+            c
+        },
         top: name.into(),
     })
 }

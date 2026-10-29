@@ -133,3 +133,66 @@ Divergences: none (19 actions / 930 basis comparisons).
   access: inherent inrange/call flags guard every access.
 - Oracle corpus differential coverage, nested rows, full static checker and
   action specialisation remain in progress; milestone 2 is not complete.
+
+## 2026-10-29 — milestone 2 checkpoint (not complete)
+
+- All §4.2 oracle rows now have gate constructions: arithmetic (including
+  arbitrary-width signed division), casts, parallel assignments, canonical
+  labels and indirect branches, allocator/inherent memory checks, lproc
+  capture/push/bind/delivery/counters, nested oracle calls and permutation
+  actions. The IR retains hierarchical nested calls. Dispatch, row effects,
+  successor XORs, pc commit and dispatch cleanup are ordered as §3.6; allocator
+  assignment slots and exchanges follow §4.2 order. Expansion scratch remains
+  private history until the complete gate prefix is inverted.
+- Reachable-pc sets omit provably inactive row expansions at each unrolled
+  step (a conservative CFG overapproximation, including every possible indirect
+  destination). This reduced div257 from 18 million gates to about 2.25 million;
+  it does not choose a branch from a wire value. Allocation/stack memory is
+  limited to addresses that can be live under the fixed budget, with ISA
+  numeric addresses retained.
+- Oracle differential: **59 discovered oracle occurrences / 488 full-interface
+  basis tuples / 488 agree / 0 diverge** across all 12 fixtures and both spec
+  objects. Interfaces of <=10 bits are exhaustive; larger interfaces use four
+  explicit patterns (all-zero, all-one, alternating, every third bit). Every
+  tuple varies targets/faults as well as inputs/memory. These are samples for
+  wide domains, not proof. Budgets are body-row-count+6 (sum_db:12), heap capped
+  at 32, stack capped at 64, depth 4 where layout exists; nested tokens use B=4.
+  Additional inc8 checks cover B=0/2/3/4 and 144 arbitrary target/fault tuples.
+- `lower_program_with_args` specialises counts/angles and hierarchical action
+  calls. `oracle_call`, `adj oracle_call`, `ctl`, and qinplace's compute/exchange/
+  inverse sequence are lowered. Tests cover all 512 controlled-call interface
+  tuples, all four qinplace inputs and adjoint, and count/angle call-adjoint
+  cancellation. CLI export accepts `--budget` and repeated `--arg` values.
+- Static validation now precedes identity for check/hash: lifted row schemas,
+  widths/name resolution/tier restrictions/terminators; basic CC/R schemas and
+  straight-line qreg handle lifetimes; action cleanup via symbolic Boolean
+  algebra/inverse histories, load/copy pairing and cell-version windows;
+  translation-lemma borrow frames; bounds, read-only interfaces, effective
+  control disjointness and region cycles. **All 14 corpus objects + 3 corrupt
+  variants + 31 Suite F check cases agree** (48 verdict comparisons).
+- Red/green: width-invalid objects were accepted by hash, the cell-version
+  mutation was accepted, allocation slot-order metadata was absent, and CLI
+  oracle export rejected budget options. Each regression now passes. Fault
+  writes initially lacked their dispatch control; mutual recursion initially
+  sorted SCC members by individual hash. Corrected under §3.6: "under at_k";
+  "lprocs ordered by closure hash with SCC members in SCC index order".
+- `scripts/run-conformance` compiles the published conformance harness unchanged
+  with rustc into this repo's .tmp, using a local CARGO_MANIFEST_DIR so the
+  harness also writes its run directory here. External sources/cases remain
+  read-only. Suite F: **31 pass / 2 fail / 2 unavailable**. Failures are
+  F-adjoint-table and F-index-space-flattening because run-action/run-oracle
+  CLI commands are absent (the corresponding library circuits are tested).
+  Unavailable cases are the harness's linking and frame-descriptor cases.
+
+### Remaining milestone-2 acceptance work
+
+The milestone and checker are **not complete**. Do not close pk3 or claim a
+full static checker on corpus agreement. Explicit staged errors remain for
+symbolic classical-action validation beyond straight-line interface oracle
+calls, §5.5 cleanup across CFG joins/indirect jumps, §3.3 qreg handle analysis
+across CFG joins, imported lproc/classical/action schema/body cases, and
+certificate-backed borrow frames. qinplace mechanics are implemented, but
+its required full-domain inverse/fault-free certificate validation remains.
+Metadata nested schemas, provenance through arbitrary calls and selector
+immutability still need a complete audit; the current checker is a tested
+partial implementation. These are M2 work, not scope removed or moved to M3.

@@ -10,19 +10,23 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::*;
 use crate::object::{FnKind, Function, Instr, Object, Operand, Type};
+use crate::oracle::Argument;
 use crate::{Error, Result, bail};
 
 /// Lower `@action` and every action it transitively calls.
 pub fn lower_program(obj: &Object, action: &str) -> Result<Program> {
+    lower_program_with_args(obj, action, &[])
+}
+pub fn lower_program_with_args(obj: &Object, action: &str, args: &[Argument]) -> Result<Program> {
     let mut lowerer = Lowerer {
         obj,
         done: Vec::new(),
         active: Vec::new(),
     };
-    lowerer.lower_named(action)?;
+    lowerer.lower_named(action, args)?;
     Ok(Program {
         circuits: lowerer.done,
-        top: action.to_string(),
+        top: specialised_name(action, args),
     })
 }
 
@@ -33,11 +37,12 @@ struct Lowerer<'a> {
 }
 
 impl<'a> Lowerer<'a> {
-    fn lower_named(&mut self, name: &str) -> Result<()> {
+    fn lower_named(&mut self, name: &str, args: &[Argument]) -> Result<()> {
+        let key = specialised_name(name, args);
         if self.active.iter().any(|n| n == name) {
             bail!("lower: action call graph cycle through @{name} (§5.1: acyclic)");
         }
-        if self.done.iter().any(|c| c.name == name) {
+        if self.done.iter().any(|c| c.name == key) {
             return Ok(());
         }
         let Some(f) = self.obj.function(name) else {
@@ -55,15 +60,22 @@ impl<'a> Lowerer<'a> {
             );
         }
         self.active.push(name.to_string());
-        let mut fb = FnLower::new(self.obj, f)?;
+        let mut fb = FnLower::new(self.obj, f, args)?;
+        fb.circuit.name = key;
         fb.lower_body()?;
         // Discover callees in body order and lower them too.
         let callees = fb.callees.clone();
+        let extra = fb.extra.clone();
         let circuit = fb.finish()?;
-        for callee in callees {
-            self.lower_named(&callee)?;
+        for (callee, arguments) in callees {
+            self.lower_named(&callee, &arguments)?;
         }
         self.active.pop();
+        for c in extra {
+            if !self.done.iter().any(|d| d.name == c.name) {
+                self.done.push(c);
+            }
+        }
         self.done.insert(0, circuit);
         Ok(())
     }
@@ -88,14 +100,24 @@ struct FnLower<'a> {
     /// Textual name -> current physical bundle name.
     rename: BTreeMap<String, String>,
     pred: Vec<QubitRef>,
-    callees: Vec<String>,
+    callees: Vec<(String, Vec<Argument>)>,
+    arguments: BTreeMap<String, Argument>,
+    extra: Vec<Circuit>,
     /// (region name, set-bit wire indices) to reverse at function exit.
     region_images: Vec<(String, Vec<u32>)>,
     fresh_counter: u32,
 }
 
 impl<'a> FnLower<'a> {
-    fn new(obj: &'a Object, f: &'a Function) -> Result<FnLower<'a>> {
+    fn new(obj: &'a Object, f: &'a Function, args: &[Argument]) -> Result<FnLower<'a>> {
+        if args.len() != f.groups[3].len() {
+            bail!("lower: @{} classical argument arity mismatch", f.name)
+        }
+        let arguments = f.groups[3]
+            .iter()
+            .zip(args)
+            .map(|(p, a)| Ok((p.name.clone(), validate_arg(&p.ty, a)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?;
         if f.blocks.len() != 1 || !f.blocks[0].params.is_empty() {
             bail!(
                 "unimplemented: multi-block action @{} (milestone 2); Q actions lower from one structured block",
@@ -179,6 +201,8 @@ impl<'a> FnLower<'a> {
             rename: BTreeMap::new(),
             pred: Vec::new(),
             callees: Vec::new(),
+            arguments,
+            extra: Vec::new(),
             region_images: Vec::new(),
             fresh_counter: 0,
         })
@@ -368,7 +392,26 @@ impl<'a> FnLower<'a> {
 
     fn lower_body(&mut self) -> Result<()> {
         // Clone the instruction list so the borrow of `self.f` ends.
-        let instrs = self.f.blocks[0].instrs.clone();
+        let mut instrs = self.f.blocks[0].instrs.clone();
+        fn substitute(is: &mut [Instr], args: &BTreeMap<String, Argument>) {
+            for i in is {
+                for o in &mut i.operands {
+                    if let Operand::Name(n) = o
+                        && let Some(a) = args.get(n)
+                    {
+                        *o = match a {
+                            Argument::Integer(n) => Operand::Int(n.clone()),
+                            Argument::Float(v) => Operand::Float(v.to_string()),
+                            Argument::Token(_) => continue,
+                        };
+                    }
+                }
+                for child in &mut i.children {
+                    substitute(child, args);
+                }
+            }
+        }
+        substitute(&mut instrs, &self.arguments);
         self.declare_regions(&instrs)?;
         self.lower_seq(&instrs, false)
     }
@@ -640,7 +683,7 @@ impl<'a> FnLower<'a> {
                 }
                 Ok(())
             }
-            "qinplace" => bail!("unimplemented: qinplace (milestone 2)"),
+            "qinplace" => self.lower_qinplace(instr),
             // -- §4.6 regions and quantum memory -----------------------------
             "qregion" => Ok(()),
             "qload" => {
@@ -994,7 +1037,13 @@ impl<'a> FnLower<'a> {
             }
         }
         match head.as_str() {
-            "oracle_call" => bail!("unimplemented: oracle_call (milestone 2)"),
+            "oracle_call" => {
+                let mut controls = self.controls();
+                if let Some(c) = extra_ctrl {
+                    controls.push(Ctrl::pos(c));
+                }
+                self.oracle_call(&operands, controls)
+            }
             "action_call" => {
                 if operands.len() != 5 {
                     bail!(
@@ -1016,9 +1065,7 @@ impl<'a> FnLower<'a> {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let (muts, ins, mems, cargs) = (&lists[0], &lists[1], &lists[2], &lists[3]);
-                if !cargs.is_empty() {
-                    bail!("unimplemented: action_call with classical arguments (milestone 2)");
-                }
+
                 let Some(cf) = self.obj.function(&callee) else {
                     bail!("lower: @{} calls unknown action @{callee}", self.f.name);
                 };
@@ -1028,11 +1075,7 @@ impl<'a> FnLower<'a> {
                         self.f.name
                     );
                 }
-                if !cf.groups[3].is_empty() {
-                    bail!(
-                        "unimplemented: action_call to @{callee} with classical parameters (milestone 2)"
-                    );
-                }
+                let arguments = resolve_args(cargs, &cf.groups[3], &self.arguments)?;
                 // Width-check against the callee header.
                 let mut args: Vec<String> = Vec::new();
                 for (actuals, formals, group) in
@@ -1081,11 +1124,12 @@ impl<'a> FnLower<'a> {
                 if let Some(c) = extra_ctrl {
                     controls.push(Ctrl::pos(c));
                 }
-                if !self.callees.contains(&callee) {
-                    self.callees.push(callee.clone());
+                let item = (callee.clone(), arguments.clone());
+                if !self.callees.contains(&item) {
+                    self.callees.push(item);
                 }
                 self.circuit.body.push(Node::Call {
-                    callee,
+                    callee: specialised_name(&callee, &arguments),
                     adjoint,
                     controls,
                     args,
@@ -1097,5 +1141,193 @@ impl<'a> FnLower<'a> {
                 self.f.name
             ),
         }
+    }
+}
+
+fn specialised_name(name: &str, args: &[Argument]) -> String {
+    if args.is_empty() {
+        name.into()
+    } else {
+        format!(
+            "{name}${}",
+            &crate::sha256::sha256_hex(format!("{args:?}").as_bytes())[..16]
+        )
+    }
+}
+pub(crate) fn validate_arg(ty: &Type, a: &Argument) -> Result<Argument> {
+    match (ty, a) {
+        (Type::Token, Argument::Token(_)) => {}
+        (Type::F64, Argument::Float(v)) if v.is_finite() => {}
+        (Type::Int(w), Argument::Integer(text)) => {
+            let negative = text.starts_with('-');
+            let digits = text.strip_prefix('-').unwrap_or(text);
+            let n = digits.parse::<u128>().map_err(|_| {
+                Error("lower: integer argument outside i1..i128 encoding (§3.3)".into())
+            })?;
+            if *w == 0
+                || *w > 128
+                || (negative && n > (1u128 << (*w - 1)))
+                || (!negative && *w < 128 && n >= (1u128 << *w))
+            {
+                bail!("lower: integer argument out of range at i{w} (§3.3)")
+            }
+        }
+        (Type::Ptr, Argument::Integer(_)) => {}
+        _ => bail!("lower: classical argument type mismatch (§3.3)"),
+    }
+    Ok(a.clone())
+}
+fn resolve_args(
+    actuals: &[String],
+    formals: &[crate::object::Param],
+    env: &BTreeMap<String, Argument>,
+) -> Result<Vec<Argument>> {
+    if actuals.len() != formals.len() {
+        bail!("lower: classical argument arity (§3.3)")
+    }
+    actuals
+        .iter()
+        .zip(formals)
+        .map(|(n, p)| {
+            let a = if let Some(a) = env.get(n) {
+                a.clone()
+            } else {
+                match p.ty {
+                    Type::Int(_) | Type::Ptr => Argument::Integer(n.clone()),
+                    Type::F64 => Argument::Float(
+                        n.parse()
+                            .map_err(|_| Error("lower: invalid f64 argument".into()))?,
+                    ),
+                    _ => bail!("lower: unknown classical argument {n}"),
+                }
+            };
+            validate_arg(&p.ty, &a)
+        })
+        .collect()
+}
+impl FnLower<'_> {
+    fn oracle_call(&mut self, ops: &[Operand], controls: Vec<Ctrl>) -> Result<()> {
+        if ops.len() != 7 {
+            bail!("lower: oracle_call needs complete interface (§4.7)")
+        }
+        let Operand::Sym(name) = &ops[0] else {
+            bail!("lower: oracle_call symbol (§4.7)")
+        };
+        let Operand::Name(token) = &ops[1] else {
+            bail!("lower: oracle token (§5.4)")
+        };
+        let Some(Argument::Token(budget)) = self.arguments.get(token) else {
+            bail!("lower: missing oracle token {token}")
+        };
+        let cf = self.obj.function(name).ok_or_else(|| {
+            Error(format!(
+                "unimplemented: imported oracle @{name} (milestone 2)"
+            ))
+        })?;
+        let Operand::List(ins) = &ops[2] else {
+            bail!("lower: oracle input list")
+        };
+        let Operand::List(mems) = &ops[5] else {
+            bail!("lower: oracle memory list")
+        };
+        let Operand::List(cargs) = &ops[6] else {
+            bail!("lower: oracle args list")
+        };
+        let arguments = resolve_args(cargs, &cf.groups[4], &self.arguments)?;
+        let program = crate::oracle::specialise(self.obj, name, *budget, &arguments)?;
+        let key = specialised_name(name, &[vec![Argument::Token(*budget)], arguments].concat());
+        let mut circuits = program.circuits;
+        for c in &mut circuits {
+            let old = c.name.clone();
+            c.name = if old == program.top {
+                key.clone()
+            } else {
+                format!("{key}${old}")
+            };
+            for node in &mut c.body {
+                if let Node::Call { callee, .. } = node {
+                    *callee = if *callee == program.top {
+                        key.clone()
+                    } else {
+                        format!("{key}${callee}")
+                    }
+                }
+            }
+        }
+        let mut args = vec![
+            self.bundle_operand(&ops[3], "oracle target")?,
+            self.bundle_operand(&ops[4], "oracle fault")?,
+        ];
+        for n in ins.iter().chain(mems) {
+            args.push(self.bundle_operand(&Operand::Name(n.clone()), "oracle input/memory")?);
+        }
+        let c = circuits.iter().find(|c| c.name == key).unwrap();
+        let formals = c.interface_bundles();
+        if args.len() != formals.len() {
+            bail!("lower: oracle interface arity (§3.3)")
+        }
+        let mut distinct = BTreeSet::new();
+        for (n, (_, w)) in args.iter().zip(formals) {
+            if self.width(n)? as u64 != w {
+                bail!("lower: oracle interface width (§3.3)")
+            }
+            if !distinct.insert(n.clone()) {
+                bail!("lower: oracle interface operands overlap (§3.3)")
+            }
+            if controls.iter().any(|c| c.qubit.bundle == *n) {
+                bail!("lower: oracle control overlaps interface (§3.3)")
+            }
+        }
+        for c in circuits {
+            if !self.extra.iter().any(|d| d.name == c.name) {
+                self.extra.push(c);
+            }
+        }
+        self.circuit.body.push(Node::Call {
+            callee: key,
+            adjoint: false,
+            controls,
+            args,
+        });
+        Ok(())
+    }
+    fn lower_qinplace(&mut self, i: &Instr) -> Result<()> {
+        self.expect_operands(i, 4)?;
+        let Operand::Sym(g) = &i.operands[0] else {
+            bail!("lower: qinplace oracle")
+        };
+        let Operand::Sym(inv) = &i.operands[1] else {
+            bail!("lower: qinplace inverse")
+        };
+        let x = self.bundle_operand(&i.operands[3], "qinplace")?;
+        let w = self.width(&x)?;
+        let f = self
+            .obj
+            .function(g)
+            .ok_or_else(|| Error("lower: missing qinplace oracle".into()))?;
+        let fw = f.groups[2][0].ty.wire_width().unwrap();
+        let t = self.produce("$inplace_t", w, WsKind::Clean, "any");
+        let fr = self.produce("$inplace_f", fw, WsKind::Clean, "any");
+        let call = |name: &str| {
+            vec![
+                Operand::Sym(name.into()),
+                i.operands[2].clone(),
+                Operand::List(vec![x.clone()]),
+                Operand::Name(t.clone()),
+                Operand::Name(fr.clone()),
+                Operand::List(vec![]),
+                Operand::List(vec![]),
+            ]
+        };
+        self.oracle_call(&call(g), self.controls())?;
+        self.circuit.body.push(Node::Exch {
+            a: x.clone(),
+            b: t.clone(),
+            controls: self.controls(),
+        });
+        self.oracle_call(&call(inv), self.controls())?;
+        self.live.remove(&t);
+        self.live.remove(&fr);
+        Ok(())
     }
 }

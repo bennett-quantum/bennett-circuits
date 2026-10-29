@@ -144,16 +144,10 @@ fn synthetic(body: &str) -> Object {
 }
 
 #[test]
-fn unimplemented_rows_fail_loudly_with_milestone() {
+fn missing_specialisation_bindings_fail_loudly() {
     for (body, needle) in [
-        (
-            "oracle_call @o tk (p) t f () ()\n",
-            "unimplemented: oracle_call (milestone 2)",
-        ),
-        (
-            "qinplace @g @ginv tk t\n",
-            "unimplemented: qinplace (milestone 2)",
-        ),
+        ("oracle_call @o tk (p) t f () ()\n", "missing oracle token"),
+        ("qinplace @g @ginv tk t\n", "missing qinplace oracle"),
         (
             "rz theta t[0]\n",
             "unimplemented: rz with non-literal angle (milestone 2)",
@@ -226,23 +220,26 @@ fn mcx_accepts_indexed_controls() {
 }
 
 #[test]
-fn deferred_call_variants_and_counts_name_milestone() {
+fn missing_call_and_count_bindings_are_contextual_errors() {
     for (body, row) in [
-        ("adj oracle_call @o tk (p) t f () ()\n", "oracle_call"),
-        ("ctl p[0] oracle_call @o tk (p) t f () ()\n", "oracle_call"),
+        (
+            "adj oracle_call @o tk (p) t f () ()\n",
+            "missing oracle token",
+        ),
+        (
+            "ctl p[0] oracle_call @o tk (p) t f () ()\n",
+            "missing oracle token",
+        ),
         ("qloop n {\nx t[0]\n}\n", "qloop"),
         ("d = qalloc any n\nqfree d\n", "qalloc"),
         ("d = qborrow any n\nqreturn d\n", "qborrow"),
         ("qregion r n 8\n", "qregion"),
-        ("action_call @b (t) (p) () (theta)\n", "action_call"),
+        ("action_call @b (t) (p) () (theta)\n", "unknown action"),
     ] {
         let error = lower_program(&synthetic(body), "a")
             .unwrap_err()
             .to_string();
-        assert!(
-            error.contains(&format!("unimplemented: {row}")) && error.contains("(milestone 2)"),
-            "{error}"
-        );
+        assert!(error.contains(row), "{error}");
     }
 }
 
