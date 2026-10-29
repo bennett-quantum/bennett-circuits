@@ -611,7 +611,7 @@ fn split_top(s: &str, sep: char) -> Vec<String> {
     parts
 }
 
-fn parse_type(text: &str) -> Result<Type> {
+pub(crate) fn parse_type(text: &str) -> Result<Type> {
     let t = text.trim();
     let bracket = |prefix: &str| -> Option<&str> {
         t.strip_prefix(prefix)?.strip_prefix('[')?.strip_suffix(']')

@@ -45,6 +45,86 @@ fn int(o: &Operand) -> Result<u64> {
         _ => bail!("checker: expected count literal (§3.3)"),
     }
 }
+/// Imported functions have no body to inspect, but their complete operand
+/// contract is published in §9.1. Checking an unlinked object must use it.
+fn callee_contract(o: &Object, n: &str) -> Result<Function> {
+    if let Some(f) = o.function(n) {
+        return Ok(f.clone());
+    }
+    let s = &o
+        .imports
+        .iter()
+        .find(|i| i.name == n)
+        .ok_or_else(|| err(format!("checker: unknown callee @{n} (§9.1)")))?
+        .signature;
+    let kind = match s.get("kind").and_then(|v| v.as_str()) {
+        Some("cc") => FnKind::Cc,
+        Some("r") => FnKind::R,
+        Some("lproc") => FnKind::Lproc,
+        Some("oracle") => FnKind::Oracle,
+        Some("action") => FnKind::Action,
+        Some("perm_action") => FnKind::PermAction,
+        _ => bail!("checker: data is not callable (§9.1)"),
+    };
+    let mut groups: [Vec<Param>; 5] = Default::default();
+    let mut add = |group: usize, key: &str, wire: bool| -> Result<()> {
+        for (i, v) in s
+            .get(key)
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| err("checker: import signature list (§9.1)"))?
+            .iter()
+            .enumerate()
+        {
+            let ty = if wire {
+                Type::Reg(
+                    v.as_u64()
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| err("host limit: import width"))?,
+                )
+            } else {
+                crate::object::parse_type(
+                    v.as_str()
+                        .ok_or_else(|| err("checker: classical type (§9.1)"))?,
+                )?
+            };
+            groups[group].push(Param {
+                name: format!("arg{i}"),
+                ty,
+                role: None,
+            });
+        }
+        Ok(())
+    };
+    match kind {
+        FnKind::Cc | FnKind::R => {
+            add(0, "params", false)?;
+            add(1, "results", false)?;
+        }
+        FnKind::Lproc => {
+            add(0, "params", true)?;
+            let w = s
+                .get("result")
+                .and_then(|v| v.as_u64())
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| err("host limit: imported result width"))?;
+            groups[1].push(Param {
+                name: "result".into(),
+                ty: Type::Reg(w),
+                role: None,
+            });
+        }
+        _ => bail!("unimplemented: §3.3 imported quantum-region contract expansion (milestone 2)"),
+    }
+    Ok(Function {
+        kind,
+        name: n.into(),
+        groups,
+        regs: vec![],
+        bounds: vec![],
+        blocks: vec![],
+        canonical_bytes: String::new(),
+    })
+}
 fn schema(f: &Function, o: &Object) -> Result<()> {
     let mut names = BTreeMap::new();
     for p in f.groups.iter().flatten() {
@@ -288,11 +368,7 @@ fn schema(f: &Function, o: &Object) -> Result<()> {
                     let Operand::Sym(n) = &a[0] else {
                         bail!("checker: lift.call symbol (§3.3)")
                     };
-                    let cf = o.function(n).ok_or_else(|| {
-                        err(format!(
-                            "unimplemented: imported lproc schema @{n} (milestone 2)"
-                        ))
-                    })?;
+                    let cf = callee_contract(o, n)?;
                     if cf.kind != FnKind::Lproc {
                         bail!("checker: lift.call non-lproc (§3.7)")
                     }
@@ -625,12 +701,10 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
             };
             *dirty |= ins.iter().any(|n| written.contains(n)) || memory && !mems.is_empty();
         }
-        if i.opcode == "lift.oracle_call" {
-            if pending.insert(pc, false).is_some() {
-                bail!(
-                    "unimplemented: §5.5 overlapping dynamic invocations at a cyclic call point (milestone 2)"
-                );
-            }
+        if i.opcode == "lift.oracle_call" && pending.insert(pc, false).is_some() {
+            bail!(
+                "unimplemented: §5.5 overlapping dynamic invocations at a cyclic call point (milestone 2)"
+            );
         }
         let mut successors = Vec::new();
         match i.opcode.as_str() {
@@ -687,6 +761,19 @@ impl Algebra {
         self.nodes.push(e.clone());
         self.index.insert(e, id);
         id
+    }
+    fn quantum_nodes(&self, id: usize, out: &mut BTreeSet<usize>) {
+        match &self.nodes[id] {
+            Expr::Quantum(..) => {
+                out.insert(id);
+            }
+            Expr::Xor(xs) | Expr::And(xs) => {
+                for x in xs {
+                    self.quantum_nodes(*x, out);
+                }
+            }
+            _ => {}
+        }
     }
     fn xor(&mut self, a: usize, b: usize) -> usize {
         let mut terms = BTreeSet::new();
@@ -748,7 +835,7 @@ impl Algebra {
 fn adj_name(g: BaseGate) -> String {
     format!("{:?}", g.adjoint())
 }
-fn abstract_action(p: &Program) -> Result<()> {
+fn abstract_action(o: &Object, f: &Function, p: &Program) -> Result<()> {
     validate_pairs(p)?;
     let flat = flatten(p)?;
     let top = p.top_circuit()?;
@@ -776,10 +863,59 @@ fn abstract_action(p: &Program) -> Result<()> {
         }
         start += w.width as usize;
     }
-    borrow_frames(&flat, &borrowed)?;
+    borrow_frames(o, f, top, &flat, &borrowed)?;
+    let reduced = cancel_adjoints(&flat.gates);
+    let (_, _, closed) = action_values(flat.num_qubits, &ws, &borrowed, top.perm, &flat.gates)?;
+    let (values, initial, _) = action_values(flat.num_qubits, &ws, &borrowed, top.perm, &reduced)?;
+    for q in ws {
+        if values[q] != initial[q] {
+            bail!("checker: workspace {q} has no exact matched cleanup (§6.2)")
+        }
+        if closed.contains(&q) {
+            bail!("checker: workspace {q} cleanup window closed (§6.2)")
+        }
+    }
+    Ok(())
+}
+/// Cancel exact inverse gates across disjoint supports only. In particular,
+/// a use of an `other` value as a control blocks cancellation of its producer.
+fn cancel_adjoints(gates: &[FlatGate]) -> Vec<FlatGate> {
+    let mut reduced: Vec<FlatGate> = Vec::new();
+    for g in gates {
+        let touched = g
+            .targets
+            .iter()
+            .chain(g.controls.iter().map(|(q, _)| q))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let prior = reduced.iter().rposition(|h| {
+            h.targets
+                .iter()
+                .chain(h.controls.iter().map(|(q, _)| q))
+                .any(|q| touched.contains(q))
+        });
+        if let Some(index) = prior
+            && reduced[index].gate == g.gate.adjoint()
+            && reduced[index].controls == g.controls
+            && reduced[index].targets == g.targets
+        {
+            reduced.remove(index);
+        } else {
+            reduced.push(g.clone());
+        }
+    }
+    reduced
+}
+fn action_values(
+    num_qubits: usize,
+    ws: &BTreeSet<usize>,
+    borrowed: &BTreeSet<usize>,
+    perm_action: bool,
+    gates: &[FlatGate],
+) -> Result<(Vec<usize>, Vec<usize>, BTreeSet<usize>)> {
     let mut algebra = Algebra::new();
     let one = algebra.intern(Expr::And(vec![]));
-    let mut values = (0..flat.num_qubits)
+    let mut values = (0..num_qubits)
         .map(|i| {
             if ws.contains(&i) && !borrowed.contains(&i) {
                 0
@@ -789,9 +925,12 @@ fn abstract_action(p: &Program) -> Result<()> {
         })
         .collect::<Vec<_>>();
     let initial = values.clone();
-    let mut deps = vec![BTreeSet::new(); flat.num_qubits];
+    let mut deps = vec![BTreeSet::new(); num_qubits];
     let mut closed = BTreeSet::new();
-    for g in &flat.gates {
+    let mut dirty_quantum = BTreeSet::new();
+    let mut other = vec![false; num_qubits];
+    let mut input_other = BTreeMap::new();
+    for g in gates {
         let diagonal = matches!(
             g.gate,
             BaseGate::S
@@ -808,16 +947,29 @@ fn abstract_action(p: &Program) -> Result<()> {
             }
         }
 
-        if top.perm && !matches!(g.gate, BaseGate::X | BaseGate::Swap) {
+        if perm_action && !matches!(g.gate, BaseGate::X | BaseGate::Swap) {
             bail!("checker: permutation action contains non-permutation gate (§5.3)")
         }
         if diagonal {
+            // A phase on a computational-basis expression is retained in
+            // the declared interface semantics (T5). On an `other` value it
+            // changes subsequent interference and must remain in its exact
+            // inverse history.
+            let touched = g
+                .targets
+                .iter()
+                .chain(g.controls.iter().map(|(q, _)| q))
+                .copied()
+                .collect::<Vec<_>>();
+            for q in touched {
+                algebra.quantum_nodes(values[q], &mut dirty_quantum);
+            }
             continue;
         }
         let perm = matches!(g.gate, BaseGate::X | BaseGate::Swap);
         if !perm {
             for q in &g.targets {
-                for w in &ws {
+                for w in ws {
                     if deps[*w].contains(q) && values[*w] != 0 {
                         closed.insert(*w);
                     }
@@ -841,6 +993,9 @@ fn abstract_action(p: &Program) -> Result<()> {
             dependency.insert(*q);
             dependency.extend(deps[*q].clone());
         }
+        for (q, _) in &g.controls {
+            algebra.quantum_nodes(values[*q], &mut dirty_quantum);
+        }
         match g.gate {
             BaseGate::X => {
                 let q = g.targets[0];
@@ -854,11 +1009,15 @@ fn abstract_action(p: &Program) -> Result<()> {
                 let (a, b) = (g.targets[0], g.targets[1]);
                 if g.controls.is_empty() {
                     values.swap(a, b);
+                    other.swap(a, b);
                 } else {
                     let delta = algebra.xor(values[a], values[b]);
                     let delta = algebra.and(&[condition, delta]);
                     values[a] = algebra.xor(values[a], delta);
                     values[b] = algebra.xor(values[b], delta);
+                    let both = other[a] || other[b];
+                    other[a] = both;
+                    other[b] = both;
                 }
                 dependency.extend(deps[a].clone());
                 dependency.extend(deps[b].clone());
@@ -871,15 +1030,24 @@ fn abstract_action(p: &Program) -> Result<()> {
                     let prior = algebra.nodes[old].clone();
                     values[*q] = match prior {
                         Expr::Quantum(name, cs, input)
-                            if name == adj_name(g.gate) && cs == controls =>
+                            if name == adj_name(g.gate)
+                                && cs == controls
+                                && other[*q]
+                                && !dirty_quantum.contains(&old) =>
                         {
+                            other[*q] = input_other.get(&old).copied().unwrap_or(false);
                             input
                         }
-                        _ => algebra.intern(Expr::Quantum(
-                            format!("{:?}", g.gate),
-                            controls.clone(),
-                            old,
-                        )),
+                        _ => {
+                            let node = algebra.intern(Expr::Quantum(
+                                format!("{:?}", g.gate),
+                                controls.clone(),
+                                old,
+                            ));
+                            input_other.insert(node, other[*q]);
+                            other[*q] = true;
+                            node
+                        }
                     };
                     deps[*q].extend(dependency.clone());
                     if values[*q] == 0 {
@@ -889,17 +1057,25 @@ fn abstract_action(p: &Program) -> Result<()> {
             }
         }
     }
-    for q in ws {
-        if values[q] != initial[q] {
-            bail!("checker: workspace {q} has no exact matched cleanup (§6.2)")
-        }
-        if closed.contains(&q) {
-            bail!("checker: workspace {q} cleanup window closed (§6.2)")
-        }
-    }
-    Ok(())
+    Ok((values, initial, closed))
 }
-fn borrow_frames(flat: &Flat, b: &BTreeSet<usize>) -> Result<()> {
+fn borrow_frames(
+    o: &Object,
+    f: &Function,
+    top: &Circuit,
+    flat: &Flat,
+    b: &BTreeSet<usize>,
+) -> Result<()> {
+    let lemma = translation_frame(flat, b);
+    if lemma.is_ok() {
+        return Ok(());
+    }
+    if o.certificate.is_none() {
+        return lemma;
+    }
+    crate::borrow::verify(o, f, top, flat, b)
+}
+fn translation_frame(flat: &Flat, b: &BTreeSet<usize>) -> Result<()> {
     if b.is_empty() {
         return Ok(());
     }
@@ -964,6 +1140,7 @@ fn borrow_frames(flat: &Flat, b: &BTreeSet<usize>) -> Result<()> {
     Ok(())
 }
 pub fn validate(o: &Object) -> Result<()> {
+    crate::metadata::validate(o)?;
     region_graph(o)?;
     for (label, value, keys, required) in [
         (
@@ -981,8 +1158,8 @@ pub fn validate(o: &Object) -> Result<()> {
         (
             "coverage",
             o.coverage.as_ref(),
-            vec!["versions", "bindings", "entries"],
-            vec!["versions", "bindings", "entries"],
+            vec!["entries"],
+            vec!["entries"],
         ),
     ] {
         if let Some(value) = value {
@@ -1010,13 +1187,14 @@ pub fn validate(o: &Object) -> Result<()> {
         }
         if f.is_action() {
             action_readonly(o, f)?;
+            crate::selectors::validate(o, f)?;
             if !f.groups[3].is_empty() {
                 static_parameter_action(o, f)?;
                 continue;
             }
             let p = crate::lower::lower_program(o, &f.name)
                 .map_err(|e| err(format!("{} (§3.3/§5.1)", e.0)))?;
-            abstract_action(&p)?;
+            abstract_action(o, f, &p)?;
         }
     }
     Ok(())
@@ -1323,427 +1501,487 @@ fn validate_pairs(p: &Program) -> Result<()> {
     Ok(())
 }
 fn classical_schema(o: &Object, f: &Function) -> Result<()> {
-    if f.blocks.len() > 1 && all(f).iter().any(|i| i.opcode.starts_with("qreg.")) {
-        bail!("unimplemented: §3.3 qreg handle liveness across CFG joins (milestone 2)")
-    }
-
-    let mut types = f.groups[0]
+    let types = f.groups[0]
         .iter()
         .map(|p| (p.name.clone(), p.ty.clone()))
         .collect::<BTreeMap<_, _>>();
-    for b in &f.blocks {
-        for p in &b.params {
-            types.insert(p.name.clone(), p.ty.clone());
-        }
-    }
-    let mut handles: BTreeMap<String, Option<String>> = f.groups[0]
+    let handles: BTreeMap<String, Option<String>> = f.groups[0]
         .iter()
         .filter(|p| matches!(p.ty, Type::QReg(_)))
         .map(|p| (p.name.clone(), None))
         .collect();
-    let mut viewed: BTreeSet<String> = BTreeSet::new();
-    for b in &f.blocks {
-        for i in &b.instrs {
-            let a = &i.operands;
-            let op = i.opcode.as_str();
-            if o.layout.is_none()
-                && (matches!(op, "alloc" | "free")
-                    || op.starts_with("load.")
-                    || op.starts_with("store."))
-            {
-                bail!("checker: classical memory in memoryless object (§7.2)")
+    let viewed: BTreeSet<String> = BTreeSet::new();
+    let mut known_types = types.clone();
+    let mut analyzed = BTreeSet::new();
+    let mut work = vec![(0usize, types, handles, viewed)];
+    let mut seen = BTreeSet::new();
+    loop {
+        while let Some((bi, mut types, mut handles, mut viewed)) = work.pop() {
+            if !seen.insert(format!("{bi}:{types:?}:{handles:?}:{viewed:?}")) {
+                continue;
             }
-            if f.kind != FnKind::Cc && (op.starts_with("qreg.") || op == "measure") {
-                bail!("checker: qreg lifecycle and measure are CC-only (§4.8)")
-            }
+            analyzed.insert(bi);
+            let b = &f.blocks[bi];
+            let mut edges = Vec::new();
+            for (ordinal, i) in b.instrs.iter().enumerate() {
+                let term = matches!(i.opcode.as_str(), "br" | "ret" | "trap");
+                if term != (ordinal + 1 == b.instrs.len()) {
+                    bail!("checker: classical block terminator position (§4.1)");
+                }
 
-            let get = |a: &Operand| -> Result<Type> {
-                let n = opname(a)?;
-                types.get(n).cloned().ok_or_else(|| {
-                    err(format!(
-                        "checker: @{0} unknown classical value {n} (§3.3)",
-                        f.name
-                    ))
-                })
-            };
-            let arity = |n: usize, r: usize| -> Result<()> {
-                if a.len() != n || i.lhs.len() != r || !i.children.is_empty() {
-                    bail!("checker: {op} operand/result arity (§3.3)")
+                let a = &i.operands;
+                let op = i.opcode.as_str();
+                if o.layout.is_none()
+                    && (matches!(op, "alloc" | "free")
+                        || op.starts_with("load.")
+                        || op.starts_with("store."))
+                {
+                    bail!("checker: classical memory in memoryless object (§7.2)")
                 }
-                Ok(())
-            };
-            let same = |a: &Type, b: &Type| -> Result<()> {
-                if a != b {
-                    bail!("checker: {op} type mismatch (§3.3)")
+                if f.kind != FnKind::Cc && (op.starts_with("qreg.") || op == "measure") {
+                    bail!("checker: qreg lifecycle and measure are CC-only (§4.8)")
                 }
-                Ok(())
-            };
-            let numeric = |t: &Type| -> Result<()> {
-                if !matches!(t, Type::Int(_) | Type::Ptr) {
-                    bail!("checker: {op} requires integer/pointer (§3.3)")
-                }
-                Ok(())
-            };
-            let suffix = |prefix: &str| -> Result<u32> {
-                let text = op
-                    .strip_prefix(prefix)
-                    .ok_or_else(|| err("checker: missing width (§3.3)"))?;
-                let n = text
-                    .parse::<u32>()
-                    .map_err(|_| err("checker: invalid width (§3.3)"))?;
-                if n == 0 || n > 128 || n.to_string() != text {
-                    bail!("checker: width outside i1..i128 (§3.3)")
-                }
-                Ok(n)
-            };
-            let mut result = None;
-            match op {
-                "add" | "sub" | "mul" | "and" | "or" | "xor" | "shl" | "lshr" | "ashr" | "udiv"
-                | "urem" | "sdiv" | "srem" => {
-                    arity(2, 1)?;
-                    let t = get(&a[0])?;
-                    numeric(&t)?;
-                    same(&t, &get(&a[1])?)?;
-                    result = Some(t);
-                }
-                "select" => {
-                    arity(3, 1)?;
-                    same(&get(&a[0])?, &Type::Int(1))?;
-                    let t = get(&a[1])?;
-                    same(&t, &get(&a[2])?)?;
-                    result = Some(t);
-                }
-                "inttoptr" => {
-                    arity(1, 1)?;
-                    if !matches!(get(&a[0])?, Type::Int(_)) {
-                        bail!("checker: inttoptr integer (§3.3)")
+
+                let get = |a: &Operand| -> Result<Type> {
+                    let n = opname(a)?;
+                    types.get(n).cloned().ok_or_else(|| {
+                        err(format!(
+                            "checker: @{0} unknown classical value {n} (§3.3)",
+                            f.name
+                        ))
+                    })
+                };
+                let arity = |n: usize, r: usize| -> Result<()> {
+                    if a.len() != n || i.lhs.len() != r || !i.children.is_empty() {
+                        bail!("checker: {op} operand/result arity (§3.3)")
                     }
-                    result = Some(Type::Ptr);
-                }
-                "alloc" => {
-                    arity(1, 1)?;
-                    numeric(&get(&a[0])?)?;
-                    result = Some(Type::Ptr);
-                }
-                "free" => {
-                    arity(1, 0)?;
-                    same(&get(&a[0])?, &Type::Ptr)?;
-                }
-                "ret" => {
-                    arity(f.groups[1].len(), 0)?;
-                    for (a, p) in a.iter().zip(&f.groups[1]) {
-                        same(&get(a)?, &p.ty)?;
+                    Ok(())
+                };
+                let same = |a: &Type, b: &Type| -> Result<()> {
+                    if a != b {
+                        bail!("checker: {op} type mismatch (§3.3)")
                     }
-                }
-                "trap" => {
-                    arity(1, 0)?;
-                    if !matches!(a[0], Operand::Int(_)) {
-                        bail!("checker: trap literal (§3.3)")
+                    Ok(())
+                };
+                let numeric = |t: &Type| -> Result<()> {
+                    if !matches!(t, Type::Int(_) | Type::Ptr) {
+                        bail!("checker: {op} requires integer/pointer (§3.3)")
                     }
-                }
-                "br" => {
-                    if !i.lhs.is_empty() {
-                        bail!("checker: branch has results (§3.3)")
+                    Ok(())
+                };
+                let suffix = |prefix: &str| -> Result<u32> {
+                    let text = op
+                        .strip_prefix(prefix)
+                        .ok_or_else(|| err("checker: missing width (§3.3)"))?;
+                    let n = text
+                        .parse::<u32>()
+                        .map_err(|_| err("checker: invalid width (§3.3)"))?;
+                    if n == 0 || n > 128 || n.to_string() != text {
+                        bail!("checker: width outside i1..i128 (§3.3)")
                     }
-                    let offset = match a.len() {
-                        1 => 0,
-                        3 => {
-                            same(&get(&a[0])?, &Type::Int(1))?;
-                            1
+                    Ok(n)
+                };
+                let mut result = None;
+                match op {
+                    "add" | "sub" | "mul" | "and" | "or" | "xor" | "shl" | "lshr" | "ashr"
+                    | "udiv" | "urem" | "sdiv" | "srem" => {
+                        arity(2, 1)?;
+                        let t = get(&a[0])?;
+                        numeric(&t)?;
+                        same(&t, &get(&a[1])?)?;
+                        result = Some(t);
+                    }
+                    "select" => {
+                        arity(3, 1)?;
+                        same(&get(&a[0])?, &Type::Int(1))?;
+                        let t = get(&a[1])?;
+                        same(&t, &get(&a[2])?)?;
+                        result = Some(t);
+                    }
+                    "inttoptr" => {
+                        arity(1, 1)?;
+                        if !matches!(get(&a[0])?, Type::Int(_)) {
+                            bail!("checker: inttoptr integer (§3.3)")
                         }
-                        _ => bail!("checker: branch arity (§3.3)"),
-                    };
-                    for label in &a[offset..] {
-                        let Operand::Label(n, Some(args)) = label else {
-                            bail!("checker: branch target and args (§3.3)")
+                        result = Some(Type::Ptr);
+                    }
+                    "alloc" => {
+                        arity(1, 1)?;
+                        numeric(&get(&a[0])?)?;
+                        result = Some(Type::Ptr);
+                    }
+                    "free" => {
+                        arity(1, 0)?;
+                        same(&get(&a[0])?, &Type::Ptr)?;
+                    }
+                    "ret" => {
+                        arity(f.groups[1].len(), 0)?;
+                        for (a, p) in a.iter().zip(&f.groups[1]) {
+                            same(&get(a)?, &p.ty)?;
+                        }
+                    }
+                    "trap" => {
+                        arity(1, 0)?;
+                        if !matches!(a[0], Operand::Int(_)) {
+                            bail!("checker: trap literal (§3.3)")
+                        }
+                    }
+                    "br" => {
+                        if !i.lhs.is_empty() {
+                            bail!("checker: branch has results (§3.3)")
+                        }
+                        let offset = match a.len() {
+                            1 => 0,
+                            3 => {
+                                same(&get(&a[0])?, &Type::Int(1))?;
+                                1
+                            }
+                            _ => bail!("checker: branch arity (§3.3)"),
                         };
-                        let block = f
-                            .blocks
-                            .iter()
-                            .find(|b| b.name == *n)
-                            .ok_or_else(|| err("checker: unknown branch label (§3.3)"))?;
-                        if args.len() != block.params.len() {
-                            bail!("checker: branch parameter count (§3.3)")
+                        for label in &a[offset..] {
+                            let Operand::Label(n, Some(args)) = label else {
+                                bail!("checker: branch target and args (§3.3)")
+                            };
+                            let block = f
+                                .blocks
+                                .iter()
+                                .find(|b| b.name == *n)
+                                .ok_or_else(|| err("checker: unknown branch label (§3.3)"))?;
+                            if args.len() != block.params.len() {
+                                bail!("checker: branch parameter count (§3.3)")
+                            }
+                            for (n, p) in args.iter().zip(&block.params) {
+                                same(&get(&Operand::Name(n.clone()))?, &p.ty)?;
+                            }
+                            edges.push((n.clone(), args.clone()));
                         }
-                        for (n, p) in args.iter().zip(&block.params) {
+                    }
+                    "call" | "uncall" => {
+                        let Some(Operand::Sym(n)) = a.first() else {
+                            bail!("checker: classical call target (§3.3)")
+                        };
+                        let cf = callee_contract(o, n)?;
+                        if !matches!(cf.kind, FnKind::Cc | FnKind::R)
+                            || f.kind == FnKind::R && cf.kind == FnKind::Cc
+                        {
+                            bail!("checker: call tier (§3.1)")
+                        }
+                        if op == "call" {
+                            arity(cf.groups[0].len() + 1, cf.groups[1].len())?;
+                            for (a, p) in a[1..].iter().zip(&cf.groups[0]) {
+                                same(&get(a)?, &p.ty)?;
+                            }
+                            for (n, p) in i.lhs.iter().zip(&cf.groups[1]) {
+                                types.insert(n.clone(), p.ty.clone());
+                            }
+                        } else {
+                            arity(3, 0)?;
+                            for (index, ps) in [(1, &cf.groups[0]), (2, &cf.groups[1])] {
+                                let Operand::List(ns) = &a[index] else {
+                                    bail!("checker: uncall tuple (§3.3)")
+                                };
+                                if ns.len() != ps.len() {
+                                    bail!("checker: uncall tuple arity (§3.3)")
+                                }
+                                for (n, p) in ns.iter().zip(ps) {
+                                    same(&get(&Operand::Name(n.clone()))?, &p.ty)?;
+                                }
+                            }
+                        }
+                    }
+                    "effect" => {
+                        if f.kind != FnKind::R || a.is_empty() || !i.lhs.is_empty() {
+                            bail!("checker: effect tier/schema (§4.1)")
+                        }
+                        for a in &a[1..] {
+                            get(a)?;
+                        }
+                    }
+                    "hostcall" => {
+                        arity(3, 1)?;
+                        if f.kind != FnKind::Cc {
+                            bail!("checker: hostcall CC only (§4.1)")
+                        }
+                        same(&get(&a[1])?, &Type::Ptr)?;
+                        numeric(&get(&a[2])?)?;
+                        result = Some(Type::Int(o.header.ptr_width));
+                    }
+                    "qreg.new" => {
+                        arity(2, 1)?;
+                        if f.kind != FnKind::Cc {
+                            bail!("checker: qreg.new CC only (§3.3)")
+                        }
+                        let n = int(&a[1])?;
+                        let n = u32::try_from(n).map_err(|_| err("host limit: qreg width"))?;
+                        result = Some(Type::QReg(n));
+                        if handles.insert(i.lhs[0].clone(), None).is_some() {
+                            bail!("checker: overwriting a live handle (§3.3)");
+                        }
+                    }
+                    "qreg.free" | "measure" => {
+                        arity(1, usize::from(op == "measure"))?;
+                        let n = opname(&a[0])?;
+                        if viewed.contains(n) || !handles.contains_key(n) || handles[n].is_some() {
+                            bail!("checker: consumed/viewed qreg handle (§3.3)")
+                        }
+                        let Type::QReg(w) = get(&a[0])? else {
+                            bail!("checker: expected qreg (§3.3)")
+                        };
+                        handles.remove(n);
+                        if op == "measure" {
+                            if w > 128 {
+                                bail!("checker: measure width exceeds 128 (§3.3)")
+                            }
+                            result = Some(Type::Int(w));
+                        }
+                    }
+                    "qreg.slice" => {
+                        arity(3, 1)?;
+                        let n = opname(&a[0])?;
+                        if viewed.contains(n) || handles.get(n) != Some(&None) {
+                            bail!("checker: qreg slice requires whole live handle (§3.3)")
+                        }
+                        let Type::QReg(w) = get(&a[0])? else {
+                            bail!("checker: slice type (§3.3)")
+                        };
+                        let lo = int(&a[1])?;
+                        let len = int(&a[2])?;
+                        if lo.checked_add(len).is_none_or(|n| n > u64::from(w)) {
+                            bail!("checker: slice bounds (§3.3)")
+                        }
+                        viewed.insert(n.into());
+                        handles.insert(i.lhs[0].clone(), Some(n.into()));
+                        result = Some(Type::QReg(len as u32));
+                    }
+                    "qreg.concat" => {
+                        arity(2, 1)?;
+                        let mut size = 0u32;
+                        for a in a {
+                            let n = opname(a)?;
+                            if viewed.contains(n) || handles.get(n) != Some(&None) {
+                                bail!("checker: concat requires live whole qregs (§3.3)")
+                            }
+                            let Type::QReg(w) = get(a)? else {
+                                bail!("checker: concat type (§3.3)")
+                            };
+                            size = size
+                                .checked_add(w)
+                                .ok_or_else(|| err("host limit: concat width"))?;
+                            handles.remove(n);
+                        }
+                        handles.insert(i.lhs[0].clone(), None);
+                        result = Some(Type::QReg(size));
+                    }
+                    "action_call" | "oracle_call" | "adj" => {
+                        let (offset, kind) = if op == "adj" {
+                            if !matches!(a.first(),Some(Operand::Name(n))if n=="action_call"||n=="oracle_call")
+                            {
+                                bail!("checker: adj region call (§4.7)")
+                            }
+                            (1, opname(&a[0])?)
+                        } else {
+                            (0, op)
+                        };
+                        let a = &a[offset..];
+                        let Some(Operand::Sym(n)) = a.first() else {
+                            bail!("checker: region target (§4.7)")
+                        };
+                        let cf = o.function(n).ok_or_else(|| {
+                            err(format!(
+                                "unimplemented: imported region schema @{n} (milestone 2)"
+                            ))
+                        })?;
+                        let mut actuals = Vec::new();
+                        let mut expected = Vec::new();
+                        if kind == "action_call" {
+                            if a.len() != 5 || !cf.is_action() {
+                                bail!("checker: action call schema (§4.7)")
+                            }
+                            for (index, params) in
+                                [(1, &cf.groups[0]), (2, &cf.groups[1]), (3, &cf.groups[2])]
+                            {
+                                let Operand::List(ns) = &a[index] else {
+                                    bail!("checker: region operand list (§4.7)")
+                                };
+                                actuals.extend(ns.clone());
+                                expected.extend(params.iter().map(|p| p.ty.clone()));
+                            }
+                        } else {
+                            if a.len() != 7 || cf.kind != FnKind::Oracle {
+                                bail!("checker: oracle call schema (§4.7)")
+                            }
+                            same(&get(&a[1])?, &Type::Token)?;
+                            let Operand::List(ins) = &a[2] else {
+                                bail!("checker: oracle inputs (§4.7)")
+                            };
+                            actuals.extend(ins.clone());
+                            expected.extend(cf.groups[0].iter().map(|p| p.ty.clone()));
+                            for (index, group) in [(3, 1), (4, 2)] {
+                                actuals.push(opname(&a[index])?.into());
+                                expected.push(cf.groups[group][0].ty.clone());
+                            }
+                            let Operand::List(mems) = &a[5] else {
+                                bail!("checker: oracle mem (§4.7)")
+                            };
+                            actuals.extend(mems.clone());
+                            expected.extend(cf.groups[3].iter().map(|p| p.ty.clone()));
+                        }
+                        if actuals.len() != expected.len()
+                            || actuals.iter().collect::<BTreeSet<_>>().len() != actuals.len()
+                        {
+                            bail!("checker: region interface arity/disjointness (§3.3)")
+                        }
+                        for (n, t) in actuals.iter().zip(expected) {
+                            let want = match t {
+                                Type::Wire(w) => w,
+                                Type::Region(a, w) => (1u32
+                                    .checked_shl(a)
+                                    .ok_or_else(|| err("host limit: region geometry"))?)
+                                .checked_mul(w)
+                                .ok_or_else(|| err("host limit: region width"))?,
+                                _ => bail!("checker: region interface type (§3.3)"),
+                            };
+                            if types.get(n) != Some(&Type::QReg(want))
+                                || viewed.contains(n)
+                                || !handles.contains_key(n)
+                            {
+                                bail!("checker: qreg region binding type/liveness (§3.3)")
+                            }
+                            if let Some(parent) = handles[n].clone() {
+                                handles.remove(n);
+                                viewed.remove(&parent);
+                            }
+                        }
+                        let Operand::List(args) = a.last().unwrap() else {
+                            bail!("checker: classical args tuple (§4.7)")
+                        };
+                        let params = &cf.groups[if kind == "oracle_call" { 4 } else { 3 }];
+                        if args.len() != params.len() {
+                            bail!("checker: region classical arity (§3.3)")
+                        }
+                        for (n, p) in args.iter().zip(params) {
                             same(&get(&Operand::Name(n.clone()))?, &p.ty)?;
                         }
                     }
-                }
-                "call" | "uncall" => {
-                    let Some(Operand::Sym(n)) = a.first() else {
-                        bail!("checker: classical call target (§3.3)")
-                    };
-                    let cf = o.function(n).ok_or_else(|| {
-                        err(format!(
-                            "unimplemented: imported classical call schema @{n} (milestone 2)"
-                        ))
-                    })?;
-                    if !matches!(cf.kind, FnKind::Cc | FnKind::R)
-                        || f.kind == FnKind::R && cf.kind == FnKind::Cc
+                    _ if op.starts_with("const.i") => {
+                        arity(1, 1)?;
+                        if !matches!(a[0], Operand::Int(_)) {
+                            bail!("checker: const literal (§3.3)")
+                        }
+                        result = Some(Type::Int(suffix("const.i")?));
+                    }
+                    _ if op.starts_with("icmp.") => {
+                        arity(2, 1)?;
+                        let t = get(&a[0])?;
+                        numeric(&t)?;
+                        same(&t, &get(&a[1])?)?;
+                        if !["eq", "ne", "ult", "ule", "slt", "sle"].contains(&&op[5..]) {
+                            bail!("checker: icmp predicate (§3.3)")
+                        }
+                        result = Some(Type::Int(1));
+                    }
+                    _ if op.starts_with("ptrtoint.i") => {
+                        arity(1, 1)?;
+                        same(&get(&a[0])?, &Type::Ptr)?;
+                        result = Some(Type::Int(suffix("ptrtoint.i")?));
+                    }
+                    _ if op.starts_with("load.i") || op.starts_with("store.i") => {
+                        let load = op.starts_with("load");
+                        arity(if load { 1 } else { 2 }, usize::from(load))?;
+                        let n = suffix(if load { "load.i" } else { "store.i" })?;
+                        if n % 8 != 0 {
+                            bail!("checker: byte memory width (§3.3)")
+                        }
+                        same(&get(&a[0])?, &Type::Ptr)?;
+                        if load {
+                            result = Some(Type::Int(n))
+                        } else {
+                            same(&get(&a[1])?, &Type::Int(n))?;
+                        }
+                    }
+                    _ if op.starts_with("zext.i")
+                        || op.starts_with("sext.i")
+                        || op.starts_with("trunc.i") =>
                     {
-                        bail!("checker: call tier (§3.1)")
-                    }
-                    if op == "call" {
-                        arity(cf.groups[0].len() + 1, cf.groups[1].len())?;
-                        for (a, p) in a[1..].iter().zip(&cf.groups[0]) {
-                            same(&get(a)?, &p.ty)?;
-                        }
-                        for (n, p) in i.lhs.iter().zip(&cf.groups[1]) {
-                            types.insert(n.clone(), p.ty.clone());
-                        }
-                    } else {
-                        arity(3, 0)?;
-                        for (index, ps) in [(1, &cf.groups[0]), (2, &cf.groups[1])] {
-                            let Operand::List(ns) = &a[index] else {
-                                bail!("checker: uncall tuple (§3.3)")
-                            };
-                            if ns.len() != ps.len() {
-                                bail!("checker: uncall tuple arity (§3.3)")
-                            }
-                            for (n, p) in ns.iter().zip(ps) {
-                                same(&get(&Operand::Name(n.clone()))?, &p.ty)?;
-                            }
-                        }
-                    }
-                }
-                "effect" => {
-                    if f.kind != FnKind::R || a.is_empty() || !i.lhs.is_empty() {
-                        bail!("checker: effect tier/schema (§4.1)")
-                    }
-                    for a in &a[1..] {
-                        get(a)?;
-                    }
-                }
-                "hostcall" => {
-                    arity(3, 1)?;
-                    if f.kind != FnKind::Cc {
-                        bail!("checker: hostcall CC only (§4.1)")
-                    }
-                    same(&get(&a[1])?, &Type::Ptr)?;
-                    numeric(&get(&a[2])?)?;
-                    result = Some(Type::Int(o.header.ptr_width));
-                }
-                "qreg.new" => {
-                    arity(2, 1)?;
-                    if f.kind != FnKind::Cc {
-                        bail!("checker: qreg.new CC only (§3.3)")
-                    }
-                    let n = int(&a[1])?;
-                    let n = u32::try_from(n).map_err(|_| err("host limit: qreg width"))?;
-                    result = Some(Type::QReg(n));
-                    handles.insert(i.lhs[0].clone(), None);
-                }
-                "qreg.free" | "measure" => {
-                    arity(1, usize::from(op == "measure"))?;
-                    let n = opname(&a[0])?;
-                    if viewed.contains(n) || !handles.contains_key(n) || handles[n].is_some() {
-                        bail!("checker: consumed/viewed qreg handle (§3.3)")
-                    }
-                    let Type::QReg(w) = get(&a[0])? else {
-                        bail!("checker: expected qreg (§3.3)")
-                    };
-                    handles.remove(n);
-                    if op == "measure" {
-                        if w > 128 {
-                            bail!("checker: measure width exceeds 128 (§3.3)")
-                        }
-                        result = Some(Type::Int(w));
-                    }
-                }
-                "qreg.slice" => {
-                    arity(3, 1)?;
-                    let n = opname(&a[0])?;
-                    if viewed.contains(n) || handles.get(n) != Some(&None) {
-                        bail!("checker: qreg slice requires whole live handle (§3.3)")
-                    }
-                    let Type::QReg(w) = get(&a[0])? else {
-                        bail!("checker: slice type (§3.3)")
-                    };
-                    let lo = int(&a[1])?;
-                    let len = int(&a[2])?;
-                    if lo.checked_add(len).is_none_or(|n| n > u64::from(w)) {
-                        bail!("checker: slice bounds (§3.3)")
-                    }
-                    viewed.insert(n.into());
-                    handles.insert(i.lhs[0].clone(), Some(n.into()));
-                    result = Some(Type::QReg(len as u32));
-                }
-                "qreg.concat" => {
-                    arity(2, 1)?;
-                    let mut size = 0u32;
-                    for a in a {
-                        let n = opname(a)?;
-                        if viewed.contains(n) || handles.get(n) != Some(&None) {
-                            bail!("checker: concat requires live whole qregs (§3.3)")
-                        }
-                        let Type::QReg(w) = get(a)? else {
-                            bail!("checker: concat type (§3.3)")
+                        arity(1, 1)?;
+                        let Type::Int(w) = get(&a[0])? else {
+                            bail!("checker: cast integer (§3.3)")
                         };
-                        size = size
-                            .checked_add(w)
-                            .ok_or_else(|| err("host limit: concat width"))?;
-                        handles.remove(n);
-                    }
-                    handles.insert(i.lhs[0].clone(), None);
-                    result = Some(Type::QReg(size));
-                }
-                "action_call" | "oracle_call" | "adj" => {
-                    let (offset, kind) = if op == "adj" {
-                        if !matches!(a.first(),Some(Operand::Name(n))if n=="action_call"||n=="oracle_call")
-                        {
-                            bail!("checker: adj region call (§4.7)")
+                        let n = suffix(if op.starts_with("zext") {
+                            "zext.i"
+                        } else if op.starts_with("sext") {
+                            "sext.i"
+                        } else {
+                            "trunc.i"
+                        })?;
+                        if op.starts_with("trunc") && n >= w || !op.starts_with("trunc") && n <= w {
+                            bail!("checker: cast strictly widens/narrows (§3.3)")
                         }
-                        (1, opname(&a[0])?)
-                    } else {
-                        (0, op)
-                    };
-                    let a = &a[offset..];
-                    let Some(Operand::Sym(n)) = a.first() else {
-                        bail!("checker: region target (§4.7)")
-                    };
-                    let cf = o.function(n).ok_or_else(|| {
-                        err(format!(
-                            "unimplemented: imported region schema @{n} (milestone 2)"
-                        ))
-                    })?;
-                    let mut actuals = Vec::new();
-                    let mut expected = Vec::new();
-                    if kind == "action_call" {
-                        if a.len() != 5 || !cf.is_action() {
-                            bail!("checker: action call schema (§4.7)")
-                        }
-                        for (index, params) in
-                            [(1, &cf.groups[0]), (2, &cf.groups[1]), (3, &cf.groups[2])]
-                        {
-                            let Operand::List(ns) = &a[index] else {
-                                bail!("checker: region operand list (§4.7)")
-                            };
-                            actuals.extend(ns.clone());
-                            expected.extend(params.iter().map(|p| p.ty.clone()));
-                        }
-                    } else {
-                        if a.len() != 7 || cf.kind != FnKind::Oracle {
-                            bail!("checker: oracle call schema (§4.7)")
-                        }
-                        same(&get(&a[1])?, &Type::Token)?;
-                        let Operand::List(ins) = &a[2] else {
-                            bail!("checker: oracle inputs (§4.7)")
-                        };
-                        actuals.extend(ins.clone());
-                        expected.extend(cf.groups[0].iter().map(|p| p.ty.clone()));
-                        for (index, group) in [(3, 1), (4, 2)] {
-                            actuals.push(opname(&a[index])?.into());
-                            expected.push(cf.groups[group][0].ty.clone());
-                        }
-                        let Operand::List(mems) = &a[5] else {
-                            bail!("checker: oracle mem (§4.7)")
-                        };
-                        actuals.extend(mems.clone());
-                        expected.extend(cf.groups[3].iter().map(|p| p.ty.clone()));
+                        result = Some(Type::Int(n));
                     }
-                    if actuals.len() != expected.len()
-                        || actuals.iter().collect::<BTreeSet<_>>().len() != actuals.len()
-                    {
-                        bail!("checker: region interface arity/disjointness (§3.3)")
-                    }
-                    for (n, t) in actuals.iter().zip(expected) {
-                        let want = match t {
-                            Type::Wire(w) => w,
-                            Type::Region(a, w) => (1u32
-                                .checked_shl(a)
-                                .ok_or_else(|| err("host limit: region geometry"))?)
-                            .checked_mul(w)
-                            .ok_or_else(|| err("host limit: region width"))?,
-                            _ => bail!("checker: region interface type (§3.3)"),
-                        };
-                        if types.get(n) != Some(&Type::QReg(want))
-                            || viewed.contains(n)
-                            || !handles.contains_key(n)
-                        {
-                            bail!("checker: qreg region binding type/liveness (§3.3)")
-                        }
-                        if let Some(parent) = handles[n].clone() {
-                            handles.remove(n);
-                            viewed.remove(&parent);
-                        }
-                    }
-                    let Operand::List(args) = a.last().unwrap() else {
-                        bail!("checker: classical args tuple (§4.7)")
-                    };
-                    let params = &cf.groups[if kind == "oracle_call" { 4 } else { 3 }];
-                    if args.len() != params.len() {
-                        bail!("checker: region classical arity (§3.3)")
-                    }
-                    for (n, p) in args.iter().zip(params) {
-                        same(&get(&Operand::Name(n.clone()))?, &p.ty)?;
-                    }
+                    _ => bail!("unimplemented: §3.3 classical schema {op} (milestone 2)"),
                 }
-                _ if op.starts_with("const.i") => {
-                    arity(1, 1)?;
-                    if !matches!(a[0], Operand::Int(_)) {
-                        bail!("checker: const literal (§3.3)")
-                    }
-                    result = Some(Type::Int(suffix("const.i")?));
+                if let Some(t) = result {
+                    types.insert(i.lhs[0].clone(), t);
                 }
-                _ if op.starts_with("icmp.") => {
-                    arity(2, 1)?;
-                    let t = get(&a[0])?;
-                    numeric(&t)?;
-                    same(&t, &get(&a[1])?)?;
-                    if !["eq", "ne", "ult", "ule", "slt", "sle"].contains(&&op[5..]) {
-                        bail!("checker: icmp predicate (§3.3)")
-                    }
-                    result = Some(Type::Int(1));
-                }
-                _ if op.starts_with("ptrtoint.i") => {
-                    arity(1, 1)?;
-                    same(&get(&a[0])?, &Type::Ptr)?;
-                    result = Some(Type::Int(suffix("ptrtoint.i")?));
-                }
-                _ if op.starts_with("load.i") || op.starts_with("store.i") => {
-                    let load = op.starts_with("load");
-                    arity(if load { 1 } else { 2 }, usize::from(load))?;
-                    let n = suffix(if load { "load.i" } else { "store.i" })?;
-                    if n % 8 != 0 {
-                        bail!("checker: byte memory width (§3.3)")
-                    }
-                    same(&get(&a[0])?, &Type::Ptr)?;
-                    if load {
-                        result = Some(Type::Int(n))
-                    } else {
-                        same(&get(&a[1])?, &Type::Int(n))?;
-                    }
-                }
-                _ if op.starts_with("zext.i")
-                    || op.starts_with("sext.i")
-                    || op.starts_with("trunc.i") =>
-                {
-                    arity(1, 1)?;
-                    let Type::Int(w) = get(&a[0])? else {
-                        bail!("checker: cast integer (§3.3)")
-                    };
-                    let n = suffix(if op.starts_with("zext") {
-                        "zext.i"
-                    } else if op.starts_with("sext") {
-                        "sext.i"
-                    } else {
-                        "trunc.i"
-                    })?;
-                    if op.starts_with("trunc") && n >= w || !op.starts_with("trunc") && n <= w {
-                        bail!("checker: cast strictly widens/narrows (§3.3)")
-                    }
-                    result = Some(Type::Int(n));
-                }
-                _ => bail!("unimplemented: §3.3 classical schema {op} (milestone 2)"),
             }
-            if let Some(t) = result {
-                types.insert(i.lhs[0].clone(), t);
+            if edges.is_empty() && (handles.values().any(Option::is_some) || !viewed.is_empty()) {
+                bail!("checker: slice must be consumed by exactly one region call (§3.3)")
+            }
+            known_types.extend(types.clone());
+            for (label, args) in edges {
+                let next = f.blocks.iter().position(|b| b.name == label).unwrap();
+                let mut ts = types.clone();
+                let mut hs = handles.clone();
+                let mut vs = viewed.clone();
+                let mut rename = BTreeMap::new();
+                for (n, p) in args.iter().zip(&f.blocks[next].params) {
+                    ts.insert(p.name.clone(), p.ty.clone());
+                    if matches!(p.ty, Type::QReg(_))
+                        && (!handles.contains_key(n)
+                            || rename.insert(n.clone(), p.name.clone()).is_some())
+                    {
+                        bail!("checker: branch passes a consumed/aliased qreg (§3.3)");
+                    }
+                }
+                // Simultaneous renaming preserves view-parent relationships.
+                for n in rename.keys() {
+                    hs.remove(n);
+                    vs.remove(n);
+                }
+                for (old, new) in &rename {
+                    let parent = handles[old]
+                        .as_ref()
+                        .map(|n| rename.get(n).unwrap_or(n).clone());
+                    if old != new && hs.contains_key(new) {
+                        bail!("checker: branch overwrites live qreg (§3.3)");
+                    }
+                    hs.insert(new.clone(), parent);
+                    if viewed.contains(old) {
+                        vs.insert(new.clone());
+                    }
+                }
+                for parent in hs.values_mut().flatten() {
+                    if let Some(n) = rename.get(parent) {
+                        *parent = n.clone();
+                    }
+                }
+                work.push((next, ts, hs, vs));
             }
         }
-    }
-    if handles.values().any(Option::is_some) || !viewed.is_empty() {
-        bail!("checker: slice must be consumed by exactly one region call (§3.3)")
+        let Some(bi) = (0..f.blocks.len()).find(|bi| !analyzed.contains(bi)) else {
+            break;
+        };
+        let mut types = known_types.clone();
+        for p in &f.blocks[bi].params {
+            types.insert(p.name.clone(), p.ty.clone());
+        }
+        let handles = types
+            .iter()
+            .filter(|(_, t)| matches!(t, Type::QReg(_)))
+            .map(|(n, _)| (n.clone(), None))
+            .collect();
+        work.push((bi, types, handles, BTreeSet::new()));
     }
     Ok(())
 }

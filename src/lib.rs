@@ -3,16 +3,19 @@
 //! `bennett-isa-spec`). See `docs/PLAN.md` for the architecture and
 //! milestone scope.
 
+mod borrow;
 mod checker;
 pub mod flatten;
 pub mod ir;
 mod ir_codec;
 pub mod json;
 pub mod lower;
+mod metadata;
 pub mod object;
 pub mod oracle;
 pub mod proof;
 pub mod qasm;
+mod selectors;
 pub mod sha256;
 
 /// Crate version string.

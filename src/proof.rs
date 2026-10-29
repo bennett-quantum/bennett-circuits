@@ -59,6 +59,38 @@ pub fn oracle_basis(
     inputs: &[Vec<bool>],
     memory: &std::collections::BTreeMap<String, Vec<bool>>,
 ) -> Result<(Vec<bool>, Vec<bool>, u64)> {
+    // Basis diagnostics have classical inputs. Once a prefix has halted,
+    // additional steps are HALT padding (§3.6/§5.2) and cannot change the
+    // committed tuple. This optimisation is only for this diagnostic
+    // executor: exported circuits still implement their exact fixed budget.
+    let mut prefix = budget.steps.min(1);
+    loop {
+        let result = oracle_basis_prefix(
+            obj,
+            name,
+            Budget {
+                steps: prefix,
+                ..budget
+            },
+            args,
+            inputs,
+            memory,
+        )?;
+        let budget_fault = result.1.first() == Some(&true) && result.1.iter().skip(1).all(|b| !*b);
+        if prefix == budget.steps || result.2 < prefix || !budget_fault {
+            return Ok(result);
+        }
+        prefix = prefix.saturating_mul(2).min(budget.steps);
+    }
+}
+fn oracle_basis_prefix(
+    obj: &Object,
+    name: &str,
+    budget: Budget,
+    args: &[crate::oracle::Argument],
+    inputs: &[Vec<bool>],
+    memory: &std::collections::BTreeMap<String, Vec<bool>>,
+) -> Result<(Vec<bool>, Vec<bool>, u64)> {
     let f = obj
         .function(name)
         .ok_or_else(|| Error(format!("oracle executor: unknown @{name}")))?;
@@ -67,7 +99,18 @@ pub fn oracle_basis(
     }
     let n = f.groups[1][0].ty.wire_width().unwrap() as usize;
     let fw = f.groups[2][0].ty.wire_width().unwrap() as usize;
-    let (program, probes) = crate::oracle::specialise_probe(obj, name, budget, args)?;
+    let mut known = std::collections::BTreeMap::new();
+    for (p, bits) in f.groups[0].iter().zip(inputs) {
+        for (i, bit) in bits.iter().enumerate() {
+            known.insert(crate::ir::QubitRef::new(&p.name, i as u32), *bit);
+        }
+    }
+    for (name, bits) in memory {
+        for (i, bit) in bits.iter().enumerate() {
+            known.insert(crate::ir::QubitRef::new(name, i as u32), *bit);
+        }
+    }
+    let (program, probes) = crate::oracle::specialise_probe(obj, name, budget, args, known)?;
     let flat = flatten(&program)?;
     let mut input = vec![false; n + fw + probes];
     for (bits, p) in inputs.iter().zip(&f.groups[0]) {

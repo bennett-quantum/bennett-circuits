@@ -79,8 +79,15 @@ fn literal(s: &str, w: usize) -> Result<Word> {
 struct Build {
     c: Circuit,
     serial: u64,
+    basis: Option<BTreeMap<QubitRef, bool>>,
 }
 impl Build {
+    fn known(&self, bit: &Bit) -> Bit {
+        match (bit, &self.basis) {
+            (Bit::Q(q, p), Some(values)) => Bit::C(values.get(q).copied().unwrap_or(false) == *p),
+            _ => bit.clone(),
+        }
+    }
     fn alloc(&mut self, w: usize, label: &str) -> Word {
         let name = format!("${label}{}", self.serial);
         self.serial += 1;
@@ -97,7 +104,8 @@ impl Build {
             panic!("compiler target must be a physical wire")
         };
         let mut controls: BTreeMap<QubitRef, bool> = BTreeMap::new();
-        for c in cs {
+        let cs = cs.iter().map(|c| self.known(c)).collect::<Vec<_>>();
+        for c in &cs {
             match c {
                 Bit::C(false) => return,
                 Bit::C(true) => {}
@@ -111,6 +119,9 @@ impl Build {
             }
         }
         assert!(!controls.contains_key(t), "compiler self-controlled X");
+        if let Some(values) = &mut self.basis {
+            *values.entry(t.clone()).or_default() ^= true;
+        }
         self.c.body.push(Node::Gate(GateInst {
             gate: BaseGate::X,
             controls: controls
@@ -121,6 +132,8 @@ impl Build {
         }));
     }
     fn xor(&mut self, a: &Bit, b: &Bit) -> Bit {
+        let (a, b) = (self.known(a), self.known(b));
+        let (a, b) = (&a, &b);
         if *a == Bit::C(false) {
             return b.clone();
         }
@@ -145,6 +158,8 @@ impl Build {
         t
     }
     fn and(&mut self, a: &Bit, b: &Bit) -> Bit {
+        let (a, b) = (self.known(a), self.known(b));
+        let (a, b) = (&a, &b);
         if *a == Bit::C(false) || *b == Bit::C(false) {
             return Bit::C(false);
         }
@@ -1087,6 +1102,15 @@ impl<'a> Machine<'a> {
         let n = self.rows.len();
         let mut possible = BTreeSet::from([0]);
         for _ in 0..self.budget.steps {
+            if self.b.basis.is_some()
+                && self
+                    .pc
+                    .iter()
+                    .enumerate()
+                    .all(|(i, b)| self.b.known(b) == Bit::C(n >> i & 1 != 0))
+            {
+                break;
+            }
             let dispatch = self.b.alloc(n + 1, "dispatch");
             for k in &possible {
                 self.b.equal_xor(&self.pc, *k, &dispatch[*k]);
@@ -1111,6 +1135,9 @@ impl<'a> Machine<'a> {
             let succ = self.b.alloc(self.p, "succ");
             let mut successors = Vec::new();
             for k in possible.iter().copied().filter(|k| *k < n) {
+                if self.b.known(&dispatch[k]) == Bit::C(false) {
+                    continue;
+                }
                 successors.push((k, self.row(k, &dispatch[k], &flag[0], &succ)?));
             }
             for (k, next) in successors {
@@ -1139,7 +1166,7 @@ impl<'a> Machine<'a> {
 /// Specialise one oracle with fixed classical arguments and budget. Interface
 /// order is target, fault, inputs, memory; all of D remains quantum input.
 pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -> Result<Program> {
-    Ok(specialise_impl(obj, name, budget, args, false)?.0)
+    Ok(specialise_impl(obj, name, budget, args, false, None)?.0)
 }
 /// Diagnostic execution includes one output bit per active forward row. These
 /// observer bits are never part of an exported oracle's interface.
@@ -1148,8 +1175,29 @@ pub(crate) fn specialise_probe(
     name: &str,
     budget: Budget,
     args: &[Argument],
+    basis: BTreeMap<QubitRef, bool>,
 ) -> Result<(Program, usize)> {
-    specialise_impl(obj, name, budget, args, true)
+    // Calls introduce opaque circuit nodes, not primitive flips. Keep their
+    // general expansion until basis propagation through call nodes is added.
+    let opaque = obj
+        .functions
+        .iter()
+        .flat_map(|f| &f.blocks)
+        .flat_map(|b| &b.instrs)
+        .any(|i| {
+            matches!(
+                i.opcode.as_str(),
+                "lift.oracle_call" | "lift.oracle_uncall" | "lift.perm_call"
+            )
+        });
+    specialise_impl(
+        obj,
+        name,
+        budget,
+        args,
+        true,
+        if opaque { None } else { Some(basis) },
+    )
 }
 fn specialise_impl(
     obj: &Object,
@@ -1157,6 +1205,7 @@ fn specialise_impl(
     budget: Budget,
     args: &[Argument],
     report_steps: bool,
+    basis: Option<BTreeMap<QubitRef, bool>>,
 ) -> Result<(Program, usize)> {
     crate::checker::region_graph(obj)?;
     let root = obj
@@ -1206,7 +1255,11 @@ fn specialise_impl(
             role: Role::In,
         });
     }
-    let mut b = Build { c, serial: 0 };
+    let mut b = Build {
+        c,
+        serial: 0,
+        basis,
+    };
     let hashes = obj.identity()?;
     let mut reachable = BTreeSet::new();
     let mut queue = vec![root];

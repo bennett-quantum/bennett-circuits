@@ -178,3 +178,304 @@ fn all_conformance_objects_agree_in_verdict_and_rule_citation() {
     assert_eq!(count, 42);
     eprintln!("STATIC HARNESS: {count} conformance objects agree in verdict and rule citation");
 }
+
+#[test]
+fn nested_metadata_schemas_reject_unknown_fields_and_wrong_types() {
+    let root = "/home/tobias/Projects/bennett-workspace/bennett-isa-spec/conformance/cases/objects";
+    for (file, before, after) in [
+        (
+            "f_import_unlinked",
+            "\"tgt\":8",
+            "\"tgt\":8,\"unexpected\":0",
+        ),
+        ("f_import_unlinked", "\"fault\":4", "\"fault\":\"wrong\""),
+        (
+            "classical",
+            "\"clock\":{\"version\":\"0.8\"}",
+            "\"clock\":{\"extra\":0,\"version\":\"0.8\"}",
+        ),
+        ("classical", "\"globals\":{}", "\"globals\":[]"),
+        (
+            "sched_inc8",
+            "\"start\":{\"time\":0}",
+            "\"start\":{\"extra\":0,\"time\":0}",
+        ),
+        ("sched_inc8", "\"iteration\":[]", "\"iteration\":false"),
+    ] {
+        let text = std::fs::read_to_string(format!("{root}/{file}.bisa")).unwrap();
+        let text = if file == "f_import_unlinked" {
+            let (prefix, rest) = text.split_once("section imports\n").unwrap();
+            format!("{prefix}section imports\n{}", rest.replace(before, after))
+        } else {
+            text.replace(before, after)
+        };
+        let text = text
+            .lines()
+            .map(|l| {
+                if l.starts_with('{') {
+                    Value::parse(l).unwrap().to_jcs()
+                } else {
+                    l.into()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let e = Object::parse(&text).and_then(|o| o.hash()).expect_err(file);
+        assert!(e.0.contains("§9.1"), "{file}: {e}");
+    }
+}
+
+fn generated(body: &str) -> Object {
+    use bennett_circuits::object::{Symbol, derived_signature};
+    let mut o=Object::parse(&format!("bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32\n\nsection symbols\n{{}}\n\nsection functions\n{body}")).unwrap();
+    o.symbols = o
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| Symbol {
+            index: i.to_string(),
+            name: f.name.clone(),
+            kind: f.kind.symbol_kind().into(),
+            signature: derived_signature(f).unwrap(),
+            stored_interface_hash: "0".repeat(64),
+        })
+        .collect();
+    o
+}
+#[test]
+fn handle_liveness_is_path_sensitive_and_renames_block_arguments() {
+    for body in [
+        "fn cc @a (p:i1) () () () ()\n^entry():\nq = qreg.new any 1\nbr p ^left() ^right()\n^left():\nqreg.free q\nbr ^done()\n^right():\nqreg.free q\nbr ^done()\n^done():\nret\n",
+        "fn cc @a () () () () ()\n^entry():\nq = qreg.new any 1\nbr ^done(q)\n^done(r:qreg[1]):\nqreg.free r\nret\n",
+        "fn cc @a (p:i1) () () () ()\n^entry():\nbr ^loop()\n^loop():\nq = qreg.new any 1\nqreg.free q\nbr p ^loop() ^done()\n^done():\nret\n",
+    ] {
+        generated(body).hash().unwrap();
+    }
+}
+#[test]
+fn handle_join_rejects_consumed_path_and_view_escape() {
+    for body in [
+        "fn cc @a (p:i1) () () () ()\n^entry():\nq = qreg.new any 1\nbr p ^left() ^done()\n^left():\nqreg.free q\nbr ^done()\n^done():\nqreg.free q\nret\n",
+        "fn cc @a () () () () ()\n^entry():\nq = qreg.new any 2\nv = qreg.slice q 0 1\nbr ^done()\n^done():\nret\n",
+    ] {
+        let e = generated(body).hash().unwrap_err();
+        assert!(
+            e.0.contains("§3.3") && !e.0.contains("unimplemented"),
+            "{e}"
+        );
+    }
+}
+
+fn with_borrow_certificate(o: &mut Object, sampled: bool, truncate_domain: bool) {
+    // Use an independent no-borrow copy to obtain the semantic identity;
+    // identity excludes certificate metadata (§9.2).
+    let mut identity = o.clone();
+    identity.functions[0].blocks[0].instrs.clear();
+    let hashes = identity.hash().unwrap();
+    // Function canonical bytes, used by identity, were not changed.
+    let h = hashes.symbols["a"].closure_hash.as_ref().unwrap();
+    let kind = if sampled { "sampled" } else { "exhaustive" };
+    let hi = if truncate_domain { "0" } else { "1" };
+    o.certificate=Some(Value::parse(&format!(r#"{{"bindings":{{"closure_hash":"{h}","interface_hash":"{h}","object_hash":"{}"}},"composition":{{"epsilon_total":{{"diamond":0}},"method":"sum_over_multiplicities","multiplicities":{{}}}},"producer":{{"materialisation":{{"llvm_version":"none","normaliser_version":"1","pipeline":[]}},"name":"test","version":"1"}},"regions":{{"{h}":{{"claims":[{{"domain":{{"borrowed":[{{"hi":"{hi}","lo":"0","name":"b","width":1}}],"bundles":[{{"hi":"1","lo":"0","name":"t","width":1}}],"regions":[]}},"expected":{{"program":"{h}"}},"kind":"{kind}"}}],"verification":{{"borrow_frames":[0]}}}}}},"versions":{{"cert":"0.8"}}}}"#,o.object_hash())).unwrap());
+    if sampled {
+        let Value::Object(cert) = o.certificate.as_mut().unwrap() else {
+            panic!()
+        };
+        let Value::Object(regions) = cert.get_mut("regions").unwrap() else {
+            panic!()
+        };
+        let Value::Object(region) = regions.get_mut(h).unwrap() else {
+            panic!()
+        };
+        let Value::Array(claims) = region.get_mut("claims").unwrap() else {
+            panic!()
+        };
+        let Value::Object(claim) = &mut claims[0] else {
+            panic!()
+        };
+        claim.insert(
+            "sampler".into(),
+            Value::parse(r#"{"algorithm":"xoshiro256**","count":1,"seed":["1","0","0","0"]}"#)
+                .unwrap(),
+        );
+    }
+}
+#[test]
+fn exhaustive_borrow_certificate_checks_full_domain_and_factorisation() {
+    let body = "perm_action @a (t:wire mut) () () () ()\n^entry():\nb = qborrow any 1\nswap b t\nswap b t\nqreturn b\n";
+    let mut o = generated(body);
+    with_borrow_certificate(&mut o, false, false);
+    o.hash().unwrap();
+    for (sampled, truncated) in [(true, false), (false, true)] {
+        let mut o = generated(body);
+        with_borrow_certificate(&mut o, sampled, truncated);
+        let e = o.hash().unwrap_err();
+        assert!(e.0.contains("§5.6"), "{e}");
+    }
+    let mut o = generated(&body.replace("swap b t\nswap b t", "cx b t"));
+    with_borrow_certificate(&mut o, false, false);
+    let e = o.hash().unwrap_err();
+    assert!(e.0.contains("§5.6"), "{e}");
+}
+#[test]
+fn borrow_certificate_cannot_rebind_to_another_object() {
+    let mut o = generated(
+        "perm_action @a (t:wire mut) () () () ()\n^entry():\nb = qborrow any 1\nswap b t\nswap b t\nqreturn b\n",
+    );
+    with_borrow_certificate(&mut o, false, false);
+    let Value::Object(cert) = o.certificate.as_mut().unwrap() else {
+        panic!()
+    };
+    let Value::Object(bindings) = cert.get_mut("bindings").unwrap() else {
+        panic!()
+    };
+    bindings.insert("object_hash".into(), Value::Str("0".repeat(64)));
+    let e = o.hash().unwrap_err();
+    assert!(e.0.contains("§12"), "{e}");
+}
+
+#[test]
+fn quantum_cleanup_cannot_erase_interference_or_entanglement() {
+    for gates in ["h d\ns d\ns d\nh d", "h d\ncx d t\nh d"] {
+        let o = generated(&format!(
+            "action @a (t:wire mut) () () () ()\n^entry():\nd = qalloc any 1\n{gates}\nqfree d\n"
+        ));
+        let e = o.hash().unwrap_err();
+        assert!(e.0.contains("§6.2"), "{e}");
+    }
+    for gates in ["h d\ns d\nsdg d\nh d", "h d\ncx d t\ncx d t\nh d"] {
+        generated(&format!(
+            "action @a (t:wire mut) () () () ()\n^entry():\nd = qalloc any 1\n{gates}\nqfree d\n"
+        ))
+        .hash()
+        .unwrap();
+    }
+}
+
+#[test]
+fn certificate_nested_fields_are_validated_before_claim_use() {
+    let mut o = generated(
+        "perm_action @a (t:wire mut) () () () ()\n^entry():\nb = qborrow any 1\nswap b t\nswap b t\nqreturn b\n",
+    );
+    with_borrow_certificate(&mut o, false, false);
+    let Value::Object(cert) = o.certificate.as_mut().unwrap() else {
+        panic!()
+    };
+    let Value::Object(producer) = cert.get_mut("producer").unwrap() else {
+        panic!()
+    };
+    producer.insert("unknown".into(), Value::Int("0".into()));
+    let e = o.hash().unwrap_err();
+    assert!(e.0.contains("§9.1"), "{e}");
+}
+
+#[test]
+fn unreachable_classical_blocks_still_require_valid_row_schemas() {
+    let o = generated("fn cc @a () () () () ()\n^entry():\nret\n^dead():\nbogus\nret\n");
+    let e = o.hash().unwrap_err();
+    assert!(e.0.contains("classical schema bogus"), "{e}");
+}
+
+#[test]
+fn selectors_and_while_dependencies_cannot_be_modified_even_if_undone() {
+    for body in [
+        "perm_action @a (c:wire mut) () () () ()\nregs {  } bounds {1}\n^entry():\nqloop 1 while c {\nx c\nx c\n}\n",
+        "perm_action @a (p:wire mut) () () () ()\nregs {  } bounds {1}\n^entry():\nc = qcopy p\nqloop 1 while c {\nx p\nx p\n}\nquncopy p c\n",
+    ] {
+        let e = generated(body).hash().unwrap_err();
+        assert!(e.0.contains("§3.3"), "{e}");
+    }
+    generated("perm_action @a (t:wire[2] mut) () () () ()\n^entry():\nqif t[0] {\nx t[1]\n}\n")
+        .hash()
+        .unwrap();
+}
+
+fn materialise(body: &str, label: &str) -> std::path::PathBuf {
+    use bennett_circuits::sha256::sha256_hex;
+    let o = generated(body);
+    let mut symbols = std::collections::BTreeMap::new();
+    for symbol in &o.symbols {
+        let h = sha256_hex(&o.semantic_envelope(&symbol.name).unwrap());
+        let entry = Value::parse(&format!(
+            r#"{{"interface_hash":"{h}","kind":"{}","name":"{}","signature":{}}}"#,
+            symbol.kind,
+            symbol.name,
+            symbol.signature.to_jcs()
+        ))
+        .unwrap();
+        symbols.insert(symbol.index.clone(), entry);
+    }
+    let text = format!(
+        "bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32\n\nsection symbols\n{}\n\nsection functions\n{body}",
+        Value::Object(symbols).to_jcs()
+    );
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/checker-witnesses");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join(format!("{label}.bisa"));
+    std::fs::write(&path, text).unwrap();
+    path
+}
+#[test]
+fn new_cleanup_and_selector_witnesses_agree_with_reference() {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    for (label, body) in [
+        (
+            "interference",
+            "action @a (t:wire mut) () () () ()\n^entry():\nd = qalloc any 1\nh d\ns d\ns d\nh d\nqfree d\n",
+        ),
+        (
+            "entanglement",
+            "action @a (t:wire mut) () () () ()\n^entry():\nd = qalloc any 1\nh d\ncx d t\nh d\nqfree d\n",
+        ),
+        (
+            "selector",
+            "perm_action @a (c:wire mut) () () () ()\nregs {  } bounds {1}\n^entry():\nqloop 1 while c {\nx c\nx c\n}\n",
+        ),
+    ] {
+        let path = materialise(body, label);
+        let ours = Object::parse(&std::fs::read_to_string(&path).unwrap()).and_then(|o| o.check());
+        let reference = Command::new(
+            base.join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"),
+        )
+        .arg("check")
+        .arg(&path)
+        .output()
+        .unwrap();
+        assert_eq!(
+            ours.is_ok(),
+            reference.status.success(),
+            "{label}: ours={ours:?}; reference stdout={} stderr={}",
+            String::from_utf8_lossy(&reference.stdout),
+            String::from_utf8_lossy(&reference.stderr)
+        );
+    }
+}
+
+#[test]
+fn imported_lproc_and_classical_calls_use_published_signature_schemas() {
+    use bennett_circuits::object::Import;
+    let text=std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/tests/fixtures/sum_db.bisa").unwrap();
+    let mut o = Object::parse(&text).unwrap();
+    let sym = o
+        .symbols
+        .remove(o.symbols.iter().position(|s| s.name == "sum").unwrap());
+    o.functions.retain(|f| f.name != "sum");
+    o.imports.push(Import {
+        name: "sum".into(),
+        signature: sym.signature,
+        pinned_closure_hash: None,
+    });
+    assert_eq!(o.hash().unwrap().status, "unlinked");
+    let mut o =
+        generated("fn cc @a (x:i8) (r:i8) () () ()\n^entry():\ny = call @external x\nret y\n");
+    o.imports.push(Import {
+        name: "external".into(),
+        signature: Value::parse(
+            r#"{"abi":"0.8","kind":"r","params":["i8"],"results":["i8"],"tier":"r"}"#,
+        )
+        .unwrap(),
+        pinned_closure_hash: None,
+    });
+    assert_eq!(o.hash().unwrap().status, "unlinked");
+}

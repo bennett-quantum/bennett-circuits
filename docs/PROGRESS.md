@@ -260,3 +260,74 @@ partial implementation. These are M2 work, not scope removed or moved to M3.
   is absent. Suite B baseline is under investigation: literal expansion for
   B=1000 consumed >8 GB on depth-limit before completing; stopped that child
   process to avoid exhausting the host. No expected result was altered.
+
+## 2026-10-29 — resumed checker: handle joins, borrow proofs and schema audit
+
+- Added path-sensitive CC/R schema/handle worklists with block-argument
+  renaming, view-parent tracking, balanced loop convergence and checking of
+  unreachable blocks. Regressions cover branch-local frees, a consumed handle
+  on one incoming path, and a view escaping without its one region call.
+  Imported lproc and CC/R calls now use the published §9.1 signature, without
+  requiring or reading an implementation body. Imported region bodies and
+  their arbitrary-call provenance still need the general symbolic checker.
+- Added recursive validation of signatures/imports, devices, layout leaves,
+  schedules, coverage, and certificate claims/domains/verification indices,
+  producer and composition fields. Unsupported certificate frame-descriptor
+  schemas fail explicitly. This is not a completed audit of every schema:
+  optional/required-field coverage, frame descriptors, arbitrary-width domain
+  metadata and remaining canonical/provenance checks still need review.
+- Certificate-backed borrow fallback now accepts bound exhaustive T3 claims
+  with `expected.program` naming the actual current closure. It verifies the
+  object/root/region/interface bindings and full interface/borrowed/region D,
+  then streams *every* basis configuration of each maximal permutation frame
+  (including arbitrary non-borrowed frame wires), checking B restoration and
+  independence of all other outputs from B. It permits swap/swap-back frames
+  outside the translation lemma. Sampled claims, truncated D, wrong bindings,
+  and dependent output fail. Expected tables/external programs and structural
+  library replay remain explicit M2 errors; no library certificate is trusted.
+  ISA certificate generation remains M4.
+- Found and fixed two false acceptances in §6.2: H–S–S–H on a clean workspace,
+  and H–CX-to-output–H. Local Boolean equality had erased interference and
+  entanglement. The checker now tracks `other` values and their quantum uses;
+  phases on perm copies still transfer to the declared operation (T5).
+  Exact adjoints cancel only across disjoint supports. Window-closing events
+  are checked on the original sequence, before that cancellation. The action
+  differential harness caught a too-conservative first fix on a phase-kickback
+  copy; the final fix preserves its valid cleanup and all 930 comparisons.
+- Selector auditing rejects modification even if subsequently undone, and
+  protects while-condition dependencies. Indexed disjoint selectors remain
+  legal. Three newly materialised, correctly hashed negative objects agree
+  with the reference CLI (interference, entanglement, selector modification).
+- Basis diagnostics no longer materialise all HALT padding: try bounded
+  prefixes and propagate the known basis through the diagnostic gate builder,
+  skipping inactive row expansions. Exported circuits retain the full-D,
+  fixed-budget construction. A million-step inc8 diagnostic regression passes;
+  published B-depth-limit and B-stack-exhaustion now pass without multi-GB
+  circuit materialisation. No expected outcome was changed.
+- Check comparisons: **93 agree / 0 diverge** = 14 fixture/spec objects +
+  3 corruptions + 31 F check invocations + 42 conformance object files +
+  3 new witnesses. These categories deliberately include repeated corpus
+  contents; this is a comparison count, not 93 distinct semantic programs.
+- Published Suite B: **31 pass / 4 fail / 0 unavailable**. Remaining failures:
+  B-call-step-reversal, B-prefix-reversal-inc8, B-ret-step-reversal (no oracle
+  `reverse` CLI), B-step-check-tiny (no independent `step-check` CLI).
+  Suite A remains **0/21/0** (no CC execution/history CLI). Suite F checkpoint
+  remains **33/0/2**; final rerun recorded below.
+
+### Current rule coverage and acceptance gaps
+
+§6.1 qalloc/copy/XOR/exchange/load/store/cell versions and concrete gate/call
+expansions are checked; oracle and qinplace specialisation remain as before.
+§6.2 exact cleanup/window checks now preserve quantum interference and uses;
+§6.3 T5 diagonal-use cleanup remains supported. §6.4 effective control
+operand disjointness, exact inverse checks and rejection of measurement-based
+cleanup realisations are implemented. Full symbolic parameterized actions,
+opaque arbitrary-call transfer/provenance, full inherited-context schedule
+keys, all incoming library certificates and complete schemas are not done.
+§5.5 direct CFG cleanup is implemented, but overlapping dynamic invocations
+at cyclic sites and interprocedural indirect jumps remain explicit M2 errors.
+§5.6 translation frames and the bound exhaustive-program subset above are
+implemented; expected-table/external-library/structural replay remains staged.
+The suite A/B CLI obligations above remain acceptance work, not exclusions.
+**Milestone 2 remains incomplete. pk3 and pk3.2 must stay open.**
+No observed reference disagreement, so no deciding-spec divergence to report.

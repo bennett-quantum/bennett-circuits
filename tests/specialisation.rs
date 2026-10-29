@@ -230,3 +230,28 @@ fn pointer_specialisation_rejects_invalid_or_out_of_range_values() {
         );
     }
 }
+
+#[test]
+fn basis_diagnostics_do_not_materialise_halt_padding_for_large_budgets() {
+    let o=Object::parse(&std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa").unwrap()).unwrap();
+    let (payload, code, steps) = bennett_circuits::proof::oracle_basis(
+        &o,
+        "inc8",
+        Budget {
+            steps: 1_000_000,
+            heap: 0,
+            stack: 0,
+            depth: 0,
+        },
+        &[],
+        &[vec![false; 8]],
+        &Default::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        payload,
+        vec![true, false, false, false, false, false, false, false]
+    );
+    assert_eq!(code, vec![false; 4]);
+    assert_eq!(steps, 3);
+}
