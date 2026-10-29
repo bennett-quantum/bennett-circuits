@@ -385,6 +385,8 @@ struct Machine<'a> {
     widths: Vec<usize>,
     p: usize,
     cw: usize,
+    report_steps: bool,
+    probes: Vec<String>,
 }
 impl<'a> Machine<'a> {
     fn read(&self, f: usize, op: &Operand) -> Result<Word> {
@@ -1089,6 +1091,21 @@ impl<'a> Machine<'a> {
             for k in &possible {
                 self.b.equal_xor(&self.pc, *k, &dispatch[*k]);
             }
+            if self.report_steps {
+                let name = format!("$executed_{}", self.probes.len());
+                self.b.c.mut_bundles.push(Bundle {
+                    name: name.clone(),
+                    width: 1,
+                    role: Role::Mut,
+                });
+                let controls = if possible.contains(&n) {
+                    vec![not(&dispatch[n])]
+                } else {
+                    Vec::new()
+                };
+                self.b.flip(&refs(&name, 1)[0], &controls);
+                self.probes.push(name);
+            }
             let old = self.b.alloc(self.p, "old_pc");
             let flag = self.b.alloc(1, "flag");
             let succ = self.b.alloc(self.p, "succ");
@@ -1122,6 +1139,25 @@ impl<'a> Machine<'a> {
 /// Specialise one oracle with fixed classical arguments and budget. Interface
 /// order is target, fault, inputs, memory; all of D remains quantum input.
 pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -> Result<Program> {
+    Ok(specialise_impl(obj, name, budget, args, false)?.0)
+}
+/// Diagnostic execution includes one output bit per active forward row. These
+/// observer bits are never part of an exported oracle's interface.
+pub(crate) fn specialise_probe(
+    obj: &Object,
+    name: &str,
+    budget: Budget,
+    args: &[Argument],
+) -> Result<(Program, usize)> {
+    specialise_impl(obj, name, budget, args, true)
+}
+fn specialise_impl(
+    obj: &Object,
+    name: &str,
+    budget: Budget,
+    args: &[Argument],
+    report_steps: bool,
+) -> Result<(Program, usize)> {
     crate::checker::region_graph(obj)?;
     let root = obj
         .function(name)
@@ -1296,6 +1332,7 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
             crate::lower::validate_arg(&p.ty, a)?;
             pseudo.insert(p.name.clone(), literal(s, *w as usize)?);
         } else if let (Type::Ptr, Argument::Integer(s)) = (&p.ty, a) {
+            crate::lower::validate_integer(s, obj.header.ptr_width)?;
             pseudo.insert(p.name.clone(), literal(s, obj.header.ptr_width as usize)?);
         } else if !matches!(
             (&p.ty, a),
@@ -1440,9 +1477,11 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
         widths,
         p,
         cw,
+        report_steps,
+        probes: Vec::new(),
     };
     m.forward()?;
-    let forward = m.b.c.body.clone();
+    let forward = m.b.c.body.iter().filter(|node|!matches!(node,Node::Gate(g)if g.targets.iter().any(|q|m.probes.contains(&q.bundle)))).cloned().collect::<Vec<_>>();
     let halt = m.b.alloc(1, "commit_halt");
     m.b.equal_xor(&m.pc, m.rows.len(), &halt[0]);
     let tgt = refs(&root.groups[1][0].name, m.result.len() as u32);
@@ -1452,12 +1491,16 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
     m.b.copy(&constant(1, fr.len()), &fr, &[not(&halt[0])]);
     m.b.equal_xor(&m.pc, m.rows.len(), &halt[0]);
     m.b.c.body.extend(forward.iter().rev().map(Node::adjoint));
-    Ok(Program {
-        circuits: {
-            let mut c = vec![m.b.c];
-            c.extend(m.callees);
-            c
+    let probe_count = m.probes.len();
+    Ok((
+        Program {
+            circuits: {
+                let mut c = vec![m.b.c];
+                c.extend(m.callees);
+                c
+            },
+            top: name.into(),
         },
-        top: name.into(),
-    })
+        probe_count,
+    ))
 }

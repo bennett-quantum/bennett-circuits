@@ -147,7 +147,7 @@ fn synthetic(body: &str) -> Object {
 fn missing_specialisation_bindings_fail_loudly() {
     for (body, needle) in [
         ("oracle_call @o tk (p) t f () ()\n", "missing oracle token"),
-        ("qinplace @g @ginv tk t\n", "missing qinplace oracle"),
+        ("qinplace @g @ginv tk t\n", "missing qinplace budget token"),
         (
             "rz theta t[0]\n",
             "unimplemented: rz with non-literal angle (milestone 2)",

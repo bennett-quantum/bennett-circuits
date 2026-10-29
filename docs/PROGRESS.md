@@ -196,3 +196,46 @@ its required full-domain inverse/fault-free certificate validation remains.
 Metadata nested schemas, provenance through arbitrary calls and selector
 immutability still need a complete audit; the current checker is a tested
 partial implementation. These are M2 work, not scope removed or moved to M3.
+
+## 2026-10-29 — inverse proofs and conformance execution
+
+- Closed the qinplace safety gap red-green: B=0 and inc2 paired with itself
+  were accepted. Compilation now streams every n-bit input, checks exact
+  workspace/input restoration, fault freedom and both inverse compositions
+  using compiled X/SWAP circuits. The returned internal proof binds the object,
+  both closure hashes, width and actual budget. No sample or imported claim is
+  trusted; this does not emit an ISA §12 certificate (M4).
+- Added compiled basis `run-oracle` with diagnostic active-row observer bits
+  (never part of exported oracle interfaces). Observer writes persist while
+  the original gate prefix is reversed; their sum reports executed rows,
+  excluding HALT padding and counting nested calls as one caller row (§4.2).
+  Added exact permutation-basis run-action with adjoint support. The published
+  F-adjoint-table and F-index-space-flattening now pass; Suite F is **33 pass /
+  0 fail / 2 unavailable**, exit 2. The earlier 31/2/2 checkpoint is superseded.
+- Red-green call-boundary regression: duplicate interface bundles and effective
+  controls overlapping call operands were accepted when a zero-trip callee
+  generated no gates. Disjointness is now checked at the call boundary (§3.3),
+  independent of its expansion. Pointer and integer classical arguments are
+  range checked, including unused parameters.
+- The full M2 checker is still unfinished. qinplace's specialised exhaustive
+  proof is implemented; incoming certificate/library validation, general
+  symbolic parameterized actions, CFG matched cleanup/handle joins and the
+  remaining audit items above stay M2. Do not infer full conformance from the
+  finite corpus or move these obligations into M3.
+
+## Latest local verification
+
+- `cargo test --offline -- --nocapture`: **49 passed, 0 failed, 0 ignored**.
+  Oracle harness: 59 occurrences / 488 agree / 0 diverge. Existing action
+  harness: 19 actions / 930 agree / 0 diverge. All workspace checks exact.
+- `cargo fmt --check`, strict Clippy (all targets), `git diff --check`: clean.
+- Published conformance harness, Suite F: **33 pass, 0 fail, 2 unavailable**;
+  exit 2. Unavailable: F-link-conflict and F-frame-live-ranges, counted by the
+  external harness (no execution probe exists).
+- No remaining observed semantic divergence, so no deciding-spec disagreement
+  to report. Resolved implementation mismatches and their rules are recorded
+  above. Corpus agreement and sampled wide domains are evidence only.
+- Child beads pk3.1 (oracle construction) and pk3.3 (action specialisation)
+  closed. pk3.2 (full checker) and pk3 remain in progress. **Milestone 2 has not
+  met its full acceptance criteria**; M3 follows only after those gaps close.
+- No pushes, no edits outside this repository, reference interpreter CLI only.

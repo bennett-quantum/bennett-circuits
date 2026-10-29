@@ -11,6 +11,7 @@ pub mod json;
 pub mod lower;
 pub mod object;
 pub mod oracle;
+pub mod proof;
 pub mod qasm;
 pub mod sha256;
 

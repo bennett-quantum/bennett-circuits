@@ -116,7 +116,12 @@ impl<'a> FnLower<'a> {
         let arguments = f.groups[3]
             .iter()
             .zip(args)
-            .map(|(p, a)| Ok((p.name.clone(), validate_arg(&p.ty, a)?)))
+            .map(|(p, a)| {
+                if let (Type::Ptr, Argument::Integer(text)) = (&p.ty, a) {
+                    validate_integer(text, obj.header.ptr_width)?;
+                }
+                Ok((p.name.clone(), validate_arg(&p.ty, a)?))
+            })
             .collect::<Result<BTreeMap<_, _>>>()?;
         if f.blocks.len() != 1 || !f.blocks[0].params.is_empty() {
             bail!(
@@ -1124,6 +1129,11 @@ impl<'a> FnLower<'a> {
                 if let Some(c) = extra_ctrl {
                     controls.push(Ctrl::pos(c));
                 }
+                if args.iter().collect::<BTreeSet<_>>().len() != args.len()
+                    || controls.iter().any(|c| args.contains(&c.qubit.bundle))
+                {
+                    bail!("lower: action call interface/effective controls overlap (§3.3)")
+                }
                 let item = (callee.clone(), arguments.clone());
                 if !self.callees.contains(&item) {
                     self.callees.push(item);
@@ -1154,25 +1164,53 @@ fn specialised_name(name: &str, args: &[Argument]) -> String {
         )
     }
 }
+pub(crate) fn validate_integer(text: &str, width: u32) -> Result<()> {
+    let negative = text.starts_with('-');
+    let text = text.strip_prefix('-').unwrap_or(text);
+    if width == 0 || text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        bail!("lower: invalid integer argument (§3.3)")
+    }
+    let mut ds = text.bytes().map(|b| b - b'0').collect::<Vec<_>>();
+    let (mut bits, mut ones) = (0u32, 0u32);
+    while ds.iter().any(|d| *d != 0) {
+        let mut carry = 0;
+        for d in &mut ds {
+            let n = carry * 10 + *d;
+            *d = n / 2;
+            carry = n % 2;
+        }
+        bits += 1;
+        ones += u32::from(carry);
+        if bits > width {
+            bail!("lower: integer argument out of range at width {width} (§3.3)")
+        }
+    }
+    if negative && bits == width && ones != 1 {
+        bail!("lower: negative integer argument outside signed range at width {width} (§3.3)")
+    }
+    Ok(())
+}
 pub(crate) fn validate_arg(ty: &Type, a: &Argument) -> Result<Argument> {
     match (ty, a) {
         (Type::Token, Argument::Token(_)) => {}
         (Type::F64, Argument::Float(v)) if v.is_finite() => {}
         (Type::Int(w), Argument::Integer(text)) => {
-            let negative = text.starts_with('-');
-            let digits = text.strip_prefix('-').unwrap_or(text);
-            let n = digits.parse::<u128>().map_err(|_| {
-                Error("lower: integer argument outside i1..i128 encoding (§3.3)".into())
-            })?;
-            if *w == 0
-                || *w > 128
-                || (negative && n > (1u128 << (*w - 1)))
-                || (!negative && *w < 128 && n >= (1u128 << *w))
+            if *w > 128 {
+                bail!("lower: integer type exceeds i128 (§3.3)")
+            }
+            validate_integer(text, *w)?;
+        }
+        (Type::Ptr, Argument::Integer(text)) => {
+            if text.strip_prefix('-').unwrap_or(text).is_empty()
+                || !text
+                    .strip_prefix('-')
+                    .unwrap_or(text)
+                    .bytes()
+                    .all(|b| b.is_ascii_digit())
             {
-                bail!("lower: integer argument out of range at i{w} (§3.3)")
+                bail!("lower: invalid pointer argument (§3.3)")
             }
         }
-        (Type::Ptr, Argument::Integer(_)) => {}
         _ => bail!("lower: classical argument type mismatch (§3.3)"),
     }
     Ok(a.clone())
@@ -1299,6 +1337,13 @@ impl FnLower<'_> {
         let Operand::Sym(inv) = &i.operands[1] else {
             bail!("lower: qinplace inverse")
         };
+        let Operand::Name(token) = &i.operands[2] else {
+            bail!("lower: qinplace token (§4.5)")
+        };
+        let Some(Argument::Token(budget)) = self.arguments.get(token) else {
+            bail!("lower: missing qinplace budget token (§4.5)")
+        };
+        crate::proof::inverse_pair(self.obj, g, inv, *budget)?;
         let x = self.bundle_operand(&i.operands[3], "qinplace")?;
         let w = self.width(&x)?;
         let f = self

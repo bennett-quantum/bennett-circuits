@@ -120,8 +120,342 @@ fn parse_budget(
     }
 }
 
+fn word(text: &str, width: usize) -> Result<Vec<bool>> {
+    use bennett_circuits::Error;
+    if let Some(hex) = text.strip_prefix("0x") {
+        let mut out = Vec::new();
+        for c in hex.chars().rev() {
+            let x = c
+                .to_digit(16)
+                .ok_or_else(|| Error("basis CLI: invalid hex integer".into()))?;
+            out.extend((0..4).map(|i| x >> i & 1 != 0));
+        }
+        if out.iter().skip(width).any(|b| *b) {
+            return Err(Error("basis CLI: integer out of range".into()));
+        }
+        out.resize(width, false);
+        out.truncate(width);
+        return Ok(out);
+    }
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(Error(format!(
+            "basis CLI: invalid unsigned integer {text:?}"
+        )));
+    }
+    let mut digits = text.bytes().map(|b| b - b'0').collect::<Vec<_>>();
+    let mut out = Vec::new();
+    for _ in 0..width {
+        let mut carry = 0;
+        for d in &mut digits {
+            let x = carry * 10 + *d;
+            *d = x / 2;
+            carry = x % 2;
+        }
+        out.push(carry != 0);
+    }
+    if digits.iter().any(|d| *d != 0) {
+        return Err(Error("basis CLI: integer out of range".into()));
+    }
+    Ok(out)
+}
+fn decimal(bits: &[bool]) -> String {
+    let mut digits = vec![0u8];
+    for bit in bits.iter().rev() {
+        let mut carry = u8::from(*bit);
+        for d in &mut digits {
+            let x = *d * 2 + carry;
+            *d = x % 10;
+            carry = x / 10;
+        }
+        if carry != 0 {
+            digits.push(carry);
+        }
+    }
+    digits.iter().rev().map(|d| (b'0' + d) as char).collect()
+}
+fn uint(bits: &[bool]) -> Value {
+    let text = decimal(bits);
+    if text
+        .parse::<u64>()
+        .is_ok_and(|n| n <= 9_007_199_254_740_991)
+    {
+        Value::Int(text)
+    } else {
+        Value::Str(text)
+    }
+}
+fn hex_bits(text: &str) -> Result<Vec<bool>> {
+    use bennett_circuits::Error;
+    if !text.len().is_multiple_of(2) {
+        return Err(Error("basis CLI: region hex needs whole bytes".into()));
+    }
+    let mut out = Vec::new();
+    for pair in text.as_bytes().chunks(2) {
+        let s = std::str::from_utf8(pair).map_err(|_| Error("basis CLI: invalid hex".into()))?;
+        let v = u8::from_str_radix(s, 16).map_err(|_| Error("basis CLI: invalid hex".into()))?;
+        out.extend((0..8).map(|i| v >> i & 1 != 0));
+    }
+    Ok(out)
+}
+#[derive(Default)]
+struct BasisOptions {
+    budget: Option<bennett_circuits::oracle::Budget>,
+    args: Vec<bennett_circuits::oracle::Argument>,
+    input: Option<String>,
+    muts: Option<String>,
+    ins: Option<String>,
+    basis: Option<String>,
+    memory: BTreeMap<String, Vec<bool>>,
+    adjoint: bool,
+}
+fn basis_options(obj: &Object, args: &[String]) -> Result<BasisOptions> {
+    use bennett_circuits::{Error, oracle::Argument};
+    let mut out = BasisOptions::default();
+    let mut options = args.iter();
+    while let Some(option) = options.next() {
+        if option == "--adjoint" {
+            if out.adjoint {
+                return Err(Error("basis CLI: repeated --adjoint".into()));
+            }
+            out.adjoint = true;
+            continue;
+        }
+        let value = options
+            .next()
+            .ok_or_else(|| Error(format!("basis CLI: {option} requires a value")))?;
+        let replace = |slot: &mut Option<String>| -> Result<()> {
+            if slot.replace(value.clone()).is_some() {
+                return Err(Error(format!("basis CLI: repeated {option}")));
+            }
+            Ok(())
+        };
+        match option.as_str() {
+            "--input" => replace(&mut out.input)?,
+            "--mut" => replace(&mut out.muts)?,
+            "--in" => replace(&mut out.ins)?,
+            "--basis" => replace(&mut out.basis)?,
+            "--budget" => {
+                if out.budget.is_some() {
+                    return Err(Error("basis CLI: repeated budget".into()));
+                }
+                out.budget = Some(parse_budget(value, obj, None)?);
+            }
+            "--arg" => {
+                out.args
+                    .push(if let Some(t) = value.strip_prefix("token:") {
+                        Argument::Token(parse_budget(t, obj, out.budget)?)
+                    } else if let Some(t) = value.strip_prefix("f64:") {
+                        let v = t
+                            .parse::<f64>()
+                            .map_err(|_| Error("basis CLI: invalid float".into()))?;
+                        if !v.is_finite() {
+                            return Err(Error("basis CLI: non-finite float (§3.1)".into()));
+                        }
+                        Argument::Float(v)
+                    } else {
+                        Argument::Integer(value.clone())
+                    });
+            }
+            "--mem" => {
+                let (n, hex) = value
+                    .split_once('=')
+                    .ok_or_else(|| Error("basis CLI: --mem requires name=hex".into()))?;
+                if out.memory.insert(n.into(), hex_bits(hex)?).is_some() {
+                    return Err(Error("basis CLI: repeated memory region".into()));
+                }
+            }
+            _ => return Err(Error(format!("basis CLI: unknown option {option}"))),
+        }
+    }
+    Ok(out)
+}
+fn values(text: &str) -> Vec<&str> {
+    if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split(',').collect()
+    }
+}
+fn run_basis(args: &[String]) -> Result<()> {
+    use bennett_circuits::{Error, flatten::flatten, lower::lower_program_with_args, proof};
+    let obj = load(&args[1])?;
+    obj.check()?;
+    let name = args[2].strip_prefix('@').unwrap_or(&args[2]);
+    let options = basis_options(&obj, &args[3..])?;
+    let f = obj
+        .function(name)
+        .ok_or_else(|| Error(format!("basis CLI: unknown @{name}")))?;
+    if args[0] == "run-oracle" {
+        if f.kind != bennett_circuits::object::FnKind::Oracle {
+            return Err(Error("run-oracle: entry is not oracle".into()));
+        }
+        if options.muts.is_some()
+            || options.ins.is_some()
+            || options.basis.is_some()
+            || options.adjoint
+        {
+            return Err(Error("run-oracle: action input options are invalid".into()));
+        }
+        let input = options
+            .input
+            .ok_or_else(|| Error("run-oracle: --input is required".into()))?;
+        let input = values(&input);
+        if input.len() != f.groups[0].len() {
+            return Err(Error("run-oracle: input arity".into()));
+        }
+        let inputs = input
+            .iter()
+            .zip(&f.groups[0])
+            .map(|(s, p)| word(s, p.ty.wire_width().unwrap() as usize))
+            .collect::<Result<Vec<_>>>()?;
+        let budget = options
+            .budget
+            .unwrap_or(parse_budget("1000000", &obj, None)?);
+        let (payload, code, steps) =
+            proof::oracle_basis(&obj, name, budget, &options.args, &inputs, &options.memory)?;
+        println!(
+            "{}",
+            Value::Object(BTreeMap::from([
+                ("code".into(), uint(&code)),
+                ("payload".into(), uint(&payload)),
+                (
+                    "steps".into(),
+                    if steps <= 9_007_199_254_740_991 {
+                        Value::Int(steps.to_string())
+                    } else {
+                        Value::Str(steps.to_string())
+                    }
+                )
+            ]))
+            .to_jcs()
+        );
+    } else {
+        if !f.is_action() {
+            return Err(Error("run-action: entry is not action".into()));
+        }
+        if options.input.is_some() || options.budget.is_some() {
+            return Err(Error(
+                "run-action: oracle input/budget options are invalid".into(),
+            ));
+        }
+        let mut program = lower_program_with_args(&obj, name, &options.args)?;
+        if options.adjoint {
+            let top = program
+                .circuits
+                .iter()
+                .position(|c| c.name == program.top)
+                .unwrap();
+            program.circuits[top] = program.circuits[top].adjoint();
+        }
+        let c = program.top_circuit()?;
+        let flat = flatten(&program)?;
+        let input = if let Some(bits) = options.basis {
+            if options.muts.is_some() || options.ins.is_some() || !options.memory.is_empty() {
+                return Err(Error(
+                    "run-action: mixed basis and tuple input forms".into(),
+                ));
+            }
+            if bits.len() != flat.interface.len() || !bits.bytes().all(|b| b == b'0' || b == b'1') {
+                return Err(Error("run-action: invalid basis bit string".into()));
+            }
+            bits.bytes().map(|b| b == b'1').collect()
+        } else {
+            let muts = options
+                .muts
+                .ok_or_else(|| Error("run-action: --basis or --mut required".into()))?;
+            let muts = values(&muts);
+            if muts.len() != c.mut_bundles.len() {
+                return Err(Error("run-action: mut arity".into()));
+            }
+            let mut bits = Vec::new();
+            for (s, p) in muts.iter().zip(&c.mut_bundles) {
+                bits.extend(word(s, p.width as usize)?);
+            }
+            let ins = options.ins.as_deref().map(values);
+            if ins
+                .as_ref()
+                .is_some_and(|is| is.len() != c.in_bundles.len())
+            {
+                return Err(Error("run-action: in arity".into()));
+            }
+            for (j, p) in c.in_bundles.iter().enumerate() {
+                bits.extend(if let Some(ins) = &ins {
+                    word(ins[j], p.width as usize)?
+                } else {
+                    vec![false; p.width as usize]
+                });
+            }
+            for m in &c.mem {
+                if let Some(data) = options.memory.get(&m.name) {
+                    if data.len() != m.width() as usize {
+                        return Err(Error("run-action: memory width mismatch".into()));
+                    }
+                    bits.extend(data);
+                } else {
+                    bits.resize(bits.len() + m.width() as usize, false);
+                }
+            }
+            if options
+                .memory
+                .keys()
+                .any(|n| !c.mem.iter().any(|m| m.name == *n))
+            {
+                return Err(Error("run-action: unknown memory region".into()));
+            }
+            bits
+        };
+        let output = proof::basis(&flat, &input)?;
+        let mut cursor = 0;
+        let mut bundles = |bs: &[bennett_circuits::ir::Bundle]| {
+            bs.iter()
+                .map(|b| {
+                    let value = uint(&output[cursor..cursor + b.width as usize]);
+                    cursor += b.width as usize;
+                    value
+                })
+                .collect::<Vec<_>>()
+        };
+        let muts = bundles(&c.mut_bundles);
+        let ins = bundles(&c.in_bundles);
+        let mut memory = BTreeMap::new();
+        for m in &c.mem {
+            let cells = (0..m.num_cells())
+                .map(|_| {
+                    let value = uint(&output[cursor..cursor + m.cell_width as usize]);
+                    cursor += m.cell_width as usize;
+                    value
+                })
+                .collect();
+            memory.insert(m.name.clone(), Value::Array(cells));
+        }
+        let bits = output
+            .iter()
+            .map(|b| if *b { '1' } else { '0' })
+            .collect::<String>();
+        let state = Value::Object(BTreeMap::from([(
+            bits,
+            Value::Array(vec![Value::Int("1".into()), Value::Int("0".into())]),
+        )]));
+        println!(
+            "{}",
+            Value::Object(BTreeMap::from([
+                ("action".into(), Value::Str(name.into())),
+                ("adjoint".into(), Value::Bool(options.adjoint)),
+                ("wires".into(), Value::Int(output.len().to_string())),
+                ("state".into(), state),
+                ("mut".into(), Value::Array(muts)),
+                ("in".into(), Value::Array(ins)),
+                ("mem".into(), Value::Object(memory))
+            ]))
+            .to_jcs()
+        );
+    }
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<()> {
     match args.first().map(String::as_str) {
+        Some("run-oracle"|"run-action") if args.len()>=3 => run_basis(args),
         Some("check") if args.len() == 2 => {
             let report = load(&args[1])?.check()?;
             println!("{}", report_json(&report).to_jcs());

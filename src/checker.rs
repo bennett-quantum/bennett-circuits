@@ -113,6 +113,23 @@ fn schema(f: &Function, o: &Object) -> Result<()> {
         for (j, i) in b.instrs.iter().enumerate() {
             let op = i.opcode.strip_prefix("lift.").unwrap_or(&i.opcode);
             let a = &i.operands;
+            if f.kind == FnKind::Oracle {
+                for operand in a {
+                    let ns = match operand {
+                        Operand::Name(n) => vec![n.as_str()],
+                        Operand::List(ns) => ns.iter().map(String::as_str).collect(),
+                        _ => Vec::new(),
+                    };
+                    if ns
+                        .iter()
+                        .any(|n| f.groups[1].iter().chain(&f.groups[2]).any(|p| p.name == *n))
+                    {
+                        bail!(
+                            "checker: oracle target/fault is not a readable pseudo-location (§3.7)"
+                        )
+                    }
+                }
+            }
             let term = matches!(
                 op,
                 "qjump" | "qbranch" | "qjumpr" | "ret" | "retval" | "fault"
@@ -391,6 +408,24 @@ fn lifted_call(o: &Object, f: &Function, i: &Instr, names: &BTreeMap<String, Typ
         })
         .ok_or_else(|| err("checker: unresolved call (§3.7)"))?;
     let oracle = i.opcode != "lift.perm_call";
+    let location = |n: &str| {
+        f.regs.iter().any(|p| p.name == n)
+            || (f.kind == FnKind::Lproc
+                && f.groups[0].iter().chain(&f.groups[1]).any(|p| p.name == n))
+    };
+    if oracle && matches!(f.kind, FnKind::Oracle | FnKind::Lproc) {
+        for index in [3, 4] {
+            if !location(opname(&a[index])?) {
+                bail!("checker: lifted oracle writes non-location (§3.7)")
+            }
+        }
+    } else if !oracle
+        && let Operand::List(ns) = &a[1]
+        && ns.iter().any(|n| !location(n))
+    {
+        bail!("checker: lifted permutation call writes pseudo-location (§3.7)")
+    }
+
     if sig.get("kind").and_then(|v| v.as_str())
         != Some(if oracle { "oracle" } else { "perm_action" })
     {
@@ -457,6 +492,13 @@ fn lifted_call(o: &Object, f: &Function, i: &Instr, names: &BTreeMap<String, Typ
             || p.get("W").and_then(|v| v.as_u64()) != Some(*w as u64)
         {
             bail!("checker: memory geometry (§3.3)")
+        }
+        if p.get("role").and_then(|v| v.as_str()) == Some("mut")
+            && f.groups[3]
+                .iter()
+                .any(|p| p.name == *n && p.role.as_deref() == Some("in"))
+        {
+            bail!("checker: in region passed to mut slot (§3.3)")
         }
         if !f.groups[3].iter().any(|p| p.name == *n) {
             bail!("checker: lifted memory must be mapped caller region (§4.2)")
@@ -936,10 +978,10 @@ fn action_readonly(o: &Object, f: &Function) -> Result<()> {
                 }
             }
         }
-        if head == "qinplace" {
-            if let Some(n) = actuals.get(3).and_then(base) {
-                written.push(n);
-            }
+        if head == "qinplace"
+            && let Some(n) = actuals.get(3).and_then(base)
+        {
+            written.push(n);
         }
         if written.iter().any(|n| readonly.contains(n)) {
             bail!("checker: in wire/region passed to mutable call slot (§5.1)")
@@ -980,6 +1022,47 @@ fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
         .collect::<BTreeMap<_, _>>();
     for i in all(f) {
         match i.opcode.as_str() {
+            "qinplace" => {
+                if i.operands.len() != 4 || !i.lhs.is_empty() || !i.children.is_empty() {
+                    bail!("checker: qinplace schema (§4.5)")
+                }
+                let tk = opname(&i.operands[2])?;
+                if names.get(tk) != Some(&Type::Token) {
+                    bail!("checker: qinplace token type (§4.5)")
+                }
+                let x = opname(&i.operands[3])?;
+                let Some(Type::Wire(width)) = names.get(x) else {
+                    bail!("checker: qinplace wire encoding (§4.5)")
+                };
+                if !f.groups[0].iter().any(|p| p.name == x) {
+                    bail!("checker: qinplace requires mutable operand (§5.1)")
+                }
+                let mut fault = None;
+                for op in &i.operands[..2] {
+                    let Operand::Sym(n) = op else {
+                        bail!("checker: qinplace oracle symbol (§4.5)")
+                    };
+                    let cf = o.function(n).ok_or_else(|| {
+                        err("unimplemented: qinplace imported inverse contract (milestone 2)")
+                    })?;
+                    if cf.kind != FnKind::Oracle
+                        || cf.groups[0].len() != 1
+                        || cf.groups[0][0].ty.wire_width() != Some(*width)
+                        || cf.groups[1][0].ty.wire_width() != Some(*width)
+                        || !cf.groups[3].is_empty()
+                        || !cf.groups[4].is_empty()
+                    {
+                        bail!("checker: qinplace unary inverse signature (§4.5)")
+                    }
+                    let fw = cf.groups[2][0].ty.wire_width();
+                    if let Some(prior) = fault
+                        && fw != prior
+                    {
+                        bail!("checker: qinplace fault width mismatch (§4.5)")
+                    }
+                    fault = Some(fw);
+                }
+            }
             "oracle_call" => {
                 if i.operands.len() != 7 || !i.lhs.is_empty() || !i.children.is_empty() {
                     bail!("checker: oracle_call schema (§3.3)")

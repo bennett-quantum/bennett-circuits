@@ -121,3 +121,112 @@ fn cli_exports_a_budget_specialised_oracle() {
     let out = sim::basis(&flat, "00000000000000000000");
     assert_eq!(out["00000000100000000000"].value(), (1.0, 0.0));
 }
+#[test]
+fn qinplace_requires_fault_free_inverse_pair_under_the_actual_token() {
+    let text=std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/conformance/cases/objects/qinplace.bisa").unwrap();
+    for (text, steps) in [
+        (text.clone(), 0),
+        (
+            text.replace("qinplace @inc2 @dec2", "qinplace @inc2 @inc2"),
+            10,
+        ),
+    ] {
+        let o = Object::parse(&text).unwrap();
+        let error = lower_program_with_args(
+            &o,
+            "inc_inplace",
+            &[Argument::Token(Budget {
+                steps,
+                heap: 0,
+                stack: 0,
+                depth: 0,
+            })],
+        )
+        .unwrap_err();
+        assert!(error.0.contains("§4.5"), "{error}");
+    }
+}
+#[test]
+fn compiled_basis_cli_serves_suite_f_execution_cases() {
+    use bennett_circuits::json::Value;
+    let base = "/home/tobias/Projects/bennett-workspace/bennett-isa-spec/conformance/cases/objects";
+    for (args, field, value) in [
+        (
+            vec![
+                "run-oracle".to_string(),
+                format!("{base}/mutual.bisa"),
+                "main".into(),
+                "--input".into(),
+                "".into(),
+                "--budget".into(),
+                "20,0,32,4".into(),
+            ],
+            "payload",
+            4,
+        ),
+        (
+            vec![
+                "run-action".into(),
+                format!("{base}/qinplace.bisa"),
+                "inc_inplace".into(),
+                "--mut".into(),
+                "0".into(),
+                "--arg".into(),
+                "token:10,0,0,0".into(),
+                "--adjoint".into(),
+            ],
+            "mut",
+            3,
+        ),
+    ] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_bennett-circuits"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let result = Value::parse(&String::from_utf8(out.stdout).unwrap()).unwrap();
+        if field == "mut" {
+            assert_eq!(
+                result.get(field).unwrap().as_array().unwrap()[0].as_u64(),
+                Some(value)
+            );
+        } else {
+            assert_eq!(result.get(field).unwrap().as_u64(), Some(value));
+            assert_eq!(result.get("steps").unwrap().as_u64(), Some(6));
+        }
+    }
+}
+#[test]
+fn call_boundary_disjointness_applies_even_to_zero_trip_callees() {
+    let leaf = "perm_action @nop (a:wire mut, b:wire mut) () () () ()\nregs {  } bounds {0}\n^entry():\nqloop 0 {\nx a\n}\n";
+    for body in [
+        "action_call @nop (t, t) () () ()\n",
+        "qpred t\naction_call @nop (t, p) () () ()\nqunpred t\n",
+    ] {
+        let o = parsed(&format!(
+            "{leaf}perm_action @parent (t:wire mut, p:wire mut) () () () ()\n^entry():\n{body}"
+        ));
+        let error = lower_program_with_args(&o, "parent", &[]).unwrap_err();
+        assert!(error.0.contains("§3.3"), "{error}");
+    }
+}
+#[test]
+fn pointer_specialisation_rejects_invalid_or_out_of_range_values() {
+    let o = parsed("action @a (t:wire mut) () () (p:ptr) ()\n^entry():\nx t\n");
+    for n in ["garbage", "4294967296", "-2147483649"] {
+        assert!(
+            lower_program_with_args(&o, "a", &[Argument::Integer(n.into())]).is_err(),
+            "{n}"
+        );
+    }
+    for n in ["4294967295", "-2147483648"] {
+        assert!(
+            lower_program_with_args(&o, "a", &[Argument::Integer(n.into())]).is_ok(),
+            "{n}"
+        );
+    }
+}
