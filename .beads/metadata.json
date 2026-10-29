@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "bennett_circuits",
+  "project_id": "41e55e5b-b5d3-458c-b47e-43d6e8556ff5"
+}
