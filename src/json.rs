@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::{bail, Error, Result};
+use crate::{Error, Result, bail};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -30,7 +30,10 @@ impl fmt::Display for Value {
 
 impl Value {
     pub fn parse(text: &str) -> Result<Value> {
-        let mut p = Parser { bytes: text.as_bytes(), pos: 0 };
+        let mut p = Parser {
+            bytes: text.as_bytes(),
+            pos: 0,
+        };
         let v = p.value()?;
         p.ws();
         if p.pos != p.bytes.len() {
@@ -150,7 +153,9 @@ struct Parser<'a> {
 
 impl Parser<'_> {
     fn ws(&mut self) {
-        while self.pos < self.bytes.len() && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r') {
+        while self.pos < self.bytes.len()
+            && matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r')
+        {
             self.pos += 1;
         }
     }
@@ -186,7 +191,11 @@ impl Parser<'_> {
                             self.pos += 1;
                             return Ok(Value::Array(items));
                         }
-                        c => bail!("JSON: expected ',' or ']' at byte {}, got {:?}", self.pos, c as char),
+                        c => bail!(
+                            "JSON: expected ',' or ']' at byte {}, got {:?}",
+                            self.pos,
+                            c as char
+                        ),
                     }
                 }
             }
@@ -217,12 +226,20 @@ impl Parser<'_> {
                             self.pos += 1;
                             return Ok(Value::Object(map));
                         }
-                        c => bail!("JSON: expected ',' or '}}' at byte {}, got {:?}", self.pos, c as char),
+                        c => bail!(
+                            "JSON: expected ',' or '}}' at byte {}, got {:?}",
+                            self.pos,
+                            c as char
+                        ),
                     }
                 }
             }
             b'-' | b'0'..=b'9' => self.number(),
-            c => bail!("JSON: unexpected character {:?} at byte {}", c as char, self.pos),
+            c => bail!(
+                "JSON: unexpected character {:?} at byte {}",
+                c as char,
+                self.pos
+            ),
         }
     }
 
@@ -316,7 +333,15 @@ impl Parser<'_> {
                 _ => {
                     // UTF-8 passthrough: copy the full sequence.
                     let start = self.pos - 1;
-                    let len = if b < 0x80 { 1 } else if b >= 0xf0 { 4 } else if b >= 0xe0 { 3 } else { 2 };
+                    let len = if b < 0x80 {
+                        1
+                    } else if b >= 0xf0 {
+                        4
+                    } else if b >= 0xe0 {
+                        3
+                    } else {
+                        2
+                    };
                     let end = start + len;
                     if end > self.bytes.len() {
                         bail!("JSON: truncated UTF-8 in string");

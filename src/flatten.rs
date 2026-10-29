@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use crate::ir::*;
-use crate::{bail, Result};
+use crate::{Result, bail};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlatGate {
@@ -30,7 +30,10 @@ pub struct Flat {
 
 pub fn flatten(program: &Program) -> Result<Flat> {
     let top = program.top_circuit()?;
-    let mut alloc = Allocator { next: 0, workspace: Vec::new() };
+    let mut alloc = Allocator {
+        next: 0,
+        workspace: Vec::new(),
+    };
     let mut map: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut interface = Vec::new();
     for (name, width) in top.interface_bundles() {
@@ -113,7 +116,11 @@ fn expand(
                 gates.push(FlatGate {
                     gate: g.gate,
                     controls: ctrls(&map, inherited, &g.controls)?,
-                    targets: g.targets.iter().map(|t| q(&map, t)).collect::<Result<Vec<_>>>()?,
+                    targets: g
+                        .targets
+                        .iter()
+                        .map(|t| q(&map, t))
+                        .collect::<Result<Vec<_>>>()?,
                 });
             }
             Node::Copy { src, dst, controls } | Node::Uncopy { src, dst, controls } => {
@@ -125,7 +132,11 @@ fn expand(
                 for (si, di) in s.iter().zip(&d) {
                     let mut cs = base.clone();
                     cs.push((*si, true));
-                    gates.push(FlatGate { gate: BaseGate::X, controls: cs, targets: vec![*di] });
+                    gates.push(FlatGate {
+                        gate: BaseGate::X,
+                        controls: cs,
+                        targets: vec![*di],
+                    });
                 }
             }
             Node::Xor { src, tgt, controls } => {
@@ -134,7 +145,11 @@ fn expand(
                 for (si, di) in s.iter().zip(&d) {
                     let mut cs = base.clone();
                     cs.push((*si, true));
-                    gates.push(FlatGate { gate: BaseGate::X, controls: cs, targets: vec![*di] });
+                    gates.push(FlatGate {
+                        gate: BaseGate::X,
+                        controls: cs,
+                        targets: vec![*di],
+                    });
                 }
             }
             Node::Exch { a, b, controls } => {
@@ -148,21 +163,80 @@ fn expand(
                     });
                 }
             }
-            Node::Load { region, addr, dst, controls }
-            | Node::Unload { region, addr, dst, controls } => {
-                expand_mem(circuit, &map, inherited, controls, region, addr, dst, MemOp::Load, gates)?;
+            Node::Load {
+                region,
+                addr,
+                dst,
+                controls,
             }
-            Node::Store { region, addr, val, controls } => {
-                expand_mem(circuit, &map, inherited, controls, region, addr, val, MemOp::Store, gates)?;
+            | Node::Unload {
+                region,
+                addr,
+                dst,
+                controls,
+            } => {
+                expand_mem(
+                    circuit,
+                    &map,
+                    inherited,
+                    controls,
+                    region,
+                    addr,
+                    dst,
+                    MemOp::Load,
+                    gates,
+                )?;
             }
-            Node::ExchM { region, addr, val, controls } => {
-                expand_mem(circuit, &map, inherited, controls, region, addr, val, MemOp::Exch, gates)?;
+            Node::Store {
+                region,
+                addr,
+                val,
+                controls,
+            } => {
+                expand_mem(
+                    circuit,
+                    &map,
+                    inherited,
+                    controls,
+                    region,
+                    addr,
+                    val,
+                    MemOp::Store,
+                    gates,
+                )?;
             }
-            Node::Call { callee, adjoint, controls, args } => {
+            Node::ExchM {
+                region,
+                addr,
+                val,
+                controls,
+            } => {
+                expand_mem(
+                    circuit,
+                    &map,
+                    inherited,
+                    controls,
+                    region,
+                    addr,
+                    val,
+                    MemOp::Exch,
+                    gates,
+                )?;
+            }
+            Node::Call {
+                callee,
+                adjoint,
+                controls,
+                args,
+            } => {
                 let Some(target) = program.circuit(callee) else {
                     bail!("flatten: call to missing circuit {callee:?}");
                 };
-                let target = if *adjoint { target.adjoint() } else { target.clone() };
+                let target = if *adjoint {
+                    target.adjoint()
+                } else {
+                    target.clone()
+                };
                 let formals = target.interface_bundles();
                 if formals.len() != args.len() {
                     bail!("flatten: call @{callee} arity mismatch");
@@ -226,12 +300,20 @@ fn expand_mem(
                 MemOp::Load => {
                     let mut cs = eq.clone();
                     cs.push((cell_wire, true));
-                    gates.push(FlatGate { gate: BaseGate::X, controls: cs, targets: vec![val_wires[j]] });
+                    gates.push(FlatGate {
+                        gate: BaseGate::X,
+                        controls: cs,
+                        targets: vec![val_wires[j]],
+                    });
                 }
                 MemOp::Store => {
                     let mut cs = eq.clone();
                     cs.push((val_wires[j], true));
-                    gates.push(FlatGate { gate: BaseGate::X, controls: cs, targets: vec![cell_wire] });
+                    gates.push(FlatGate {
+                        gate: BaseGate::X,
+                        controls: cs,
+                        targets: vec![cell_wire],
+                    });
                 }
                 MemOp::Exch => {
                     gates.push(FlatGate {

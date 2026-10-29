@@ -18,8 +18,7 @@ fn workspace() -> PathBuf {
 }
 
 fn ref_bin() -> PathBuf {
-    let p = workspace()
-        .join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
+    let p = workspace().join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
     assert!(
         p.exists(),
         "differential oracle missing: {} (build bennett-isa-spec first)",
@@ -76,13 +75,21 @@ fn assert_agrees(label: &str, text: &str, path: &Path) {
     let mut ref_map: BTreeMap<String, (String, Option<String>)> = BTreeMap::new();
     for (name, entry) in ref_symbols {
         let ih = json_str(entry, "interface_hash").to_string();
-        let ch = entry.get("closure_hash").and_then(Value::as_str).map(str::to_string);
+        let ch = entry
+            .get("closure_hash")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         ref_map.insert(name.clone(), (ih, ch));
     }
     let our_map: BTreeMap<String, (String, Option<String>)> = report
         .symbols
         .iter()
-        .map(|(n, h)| (n.clone(), (h.interface_hash.clone(), h.closure_hash.clone())))
+        .map(|(n, h)| {
+            (
+                n.clone(),
+                (h.interface_hash.clone(), h.closure_hash.clone()),
+            )
+        })
         .collect();
     assert_eq!(our_map, ref_map, "{label}: symbol hashes");
 }
@@ -111,10 +118,9 @@ fn check_agrees_on_every_fixture() {
 /// `bennett-object`) from the published spec and check agreement on them.
 #[test]
 fn check_agrees_on_spec_examples() {
-    let spec = std::fs::read_to_string(
-        workspace().join("bennett-isa-spec/spec/Bennett-ISA-Spec.md"),
-    )
-    .expect("read ISA spec");
+    let spec =
+        std::fs::read_to_string(workspace().join("bennett-isa-spec/spec/Bennett-ISA-Spec.md"))
+            .expect("read ISA spec");
     let mut examples: Vec<String> = Vec::new();
     let mut current: Option<String> = None;
     for line in spec.lines() {
@@ -175,13 +181,22 @@ fn corrupted_objects_rejected_by_both() {
             "stored hash corrupted",
             text.replacen("8ce5e64f", "00000000", 1),
         ),
-        ("body corrupted", text.replacen("lift.const.i8 1", "lift.const.i8 2", 1)),
-        ("signature corrupted", text.replacen("\"tgt\":8", "\"tgt\":9", 1)),
+        (
+            "body corrupted",
+            text.replacen("lift.const.i8 1", "lift.const.i8 2", 1),
+        ),
+        (
+            "signature corrupted",
+            text.replacen("\"tgt\":8", "\"tgt\":9", 1),
+        ),
     ] {
         assert_ne!(mutated, text, "{label}: mutation did not apply");
         let path = tmp.join("corrupt.bisa");
         std::fs::write(&path, &mutated).expect("write corrupt");
-        assert!(ref_check(&path).is_err(), "{label}: ref accepted corruption");
+        assert!(
+            ref_check(&path).is_err(),
+            "{label}: ref accepted corruption"
+        );
         let ours = Object::parse(&mutated).and_then(|o| o.check());
         assert!(ours.is_err(), "{label}: we accepted corruption: {ours:?}");
     }

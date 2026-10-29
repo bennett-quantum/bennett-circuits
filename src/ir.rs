@@ -4,7 +4,7 @@
 //! (docs/PLAN.md). Predication lives in gate/node control lists (§3.5);
 //! bounded loops are already unrolled by lowering.
 
-use crate::{bail, Result};
+use crate::{Result, bail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
@@ -77,7 +77,10 @@ pub struct QubitRef {
 
 impl QubitRef {
     pub fn new(bundle: &str, index: u32) -> QubitRef {
-        QubitRef { bundle: bundle.to_string(), index }
+        QubitRef {
+            bundle: bundle.to_string(),
+            index,
+        }
     }
 }
 
@@ -89,7 +92,10 @@ pub struct Ctrl {
 
 impl Ctrl {
     pub fn pos(qubit: QubitRef) -> Ctrl {
-        Ctrl { qubit, positive: true }
+        Ctrl {
+            qubit,
+            positive: true,
+        }
     }
 }
 
@@ -143,25 +149,66 @@ pub struct GateInst {
 pub enum Node {
     Gate(GateInst),
     /// `qcopy`: `dst` (fresh, clean) ^= `src`, bit by bit.
-    Copy { src: String, dst: String, controls: Vec<Ctrl> },
+    Copy {
+        src: String,
+        dst: String,
+        controls: Vec<Ctrl>,
+    },
     /// `quncopy`: inverse of its `Copy`; consumes `dst`.
-    Uncopy { src: String, dst: String, controls: Vec<Ctrl> },
+    Uncopy {
+        src: String,
+        dst: String,
+        controls: Vec<Ctrl>,
+    },
     /// `qxor`: `tgt` ^= `src`.
-    Xor { src: String, tgt: String, controls: Vec<Ctrl> },
+    Xor {
+        src: String,
+        tgt: String,
+        controls: Vec<Ctrl>,
+    },
     /// `qexch`: bundle-wise swap.
-    Exch { a: String, b: String, controls: Vec<Ctrl> },
+    Exch {
+        a: String,
+        b: String,
+        controls: Vec<Ctrl>,
+    },
     /// `qload`: `dst` (fresh, clean, cell width) ^= `region[addr]`.
-    Load { region: String, addr: String, dst: String, controls: Vec<Ctrl> },
+    Load {
+        region: String,
+        addr: String,
+        dst: String,
+        controls: Vec<Ctrl>,
+    },
     /// `qunload`: inverse of its `Load`; consumes `dst`.
-    Unload { region: String, addr: String, dst: String, controls: Vec<Ctrl> },
+    Unload {
+        region: String,
+        addr: String,
+        dst: String,
+        controls: Vec<Ctrl>,
+    },
     /// `qstore`: `region[addr]` ^= `val`.
-    Store { region: String, addr: String, val: String, controls: Vec<Ctrl> },
+    Store {
+        region: String,
+        addr: String,
+        val: String,
+        controls: Vec<Ctrl>,
+    },
     /// `qexchm`: swap `val` with `region[addr]`.
-    ExchM { region: String, addr: String, val: String, controls: Vec<Ctrl> },
+    ExchM {
+        region: String,
+        addr: String,
+        val: String,
+        controls: Vec<Ctrl>,
+    },
     /// A region call kept hierarchical. `args` are caller bundle names
     /// in callee interface order (mut, in, mem). `controls` are the
     /// `ctl`/predicate controls of the call site.
-    Call { callee: String, adjoint: bool, controls: Vec<Ctrl>, args: Vec<String> },
+    Call {
+        callee: String,
+        adjoint: bool,
+        controls: Vec<Ctrl>,
+        args: Vec<String>,
+    },
 }
 
 impl Node {
@@ -182,19 +229,34 @@ impl Node {
                 dst: dst.clone(),
                 controls: controls.clone(),
             },
-            Node::Load { region, addr, dst, controls } => Node::Unload {
+            Node::Load {
+                region,
+                addr,
+                dst,
+                controls,
+            } => Node::Unload {
                 region: region.clone(),
                 addr: addr.clone(),
                 dst: dst.clone(),
                 controls: controls.clone(),
             },
-            Node::Unload { region, addr, dst, controls } => Node::Load {
+            Node::Unload {
+                region,
+                addr,
+                dst,
+                controls,
+            } => Node::Load {
                 region: region.clone(),
                 addr: addr.clone(),
                 dst: dst.clone(),
                 controls: controls.clone(),
             },
-            Node::Call { callee, adjoint, controls, args } => Node::Call {
+            Node::Call {
+                callee,
+                adjoint,
+                controls,
+                args,
+            } => Node::Call {
                 callee: callee.clone(),
                 adjoint: !adjoint,
                 controls: controls.clone(),
@@ -284,7 +346,10 @@ impl Circuit {
     pub fn check_widths(&self) -> Result<()> {
         for (name, w) in self.interface_bundles() {
             if w > u64::from(u32::MAX) {
-                bail!("ir: bundle {name:?} of circuit {} is too wide ({w} wires)", self.name);
+                bail!(
+                    "ir: bundle {name:?} of circuit {} is too wide ({w} wires)",
+                    self.name
+                );
             }
         }
         Ok(())
@@ -293,7 +358,7 @@ impl Circuit {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
-    /// Top circuit first, then callees in discovery order.
+    /// Top circuit first, followed by its reachable callees.
     pub circuits: Vec<Circuit>,
     pub top: String,
 }

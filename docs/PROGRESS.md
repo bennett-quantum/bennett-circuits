@@ -56,9 +56,9 @@ only; reference binary used solely through its CLI in tests.
 - [x] M1.2 loader + `check` agreement
 - [x] M1.3 IR + action lowering
 - [x] M1.4 OpenQASM 3 export + round-trip
-- [ ] M1.5 differential harness vs `run-action`
+- [x] M1.5 differential harness vs `run-action`
 
-Divergences: none yet.
+Divergences: none (19 actions / 930 basis comparisons).
 
 ## 2026-10-29 — resumed IR/lowering
 
@@ -81,3 +81,38 @@ Divergences: none yet.
 - Round trips and independent gate-text flattening agree on all 13 actions;
   executable mutation and CLI export tests pass. Zero-wire identities use
   one inert sentinel qubit because QASM gate declarations need an operand.
+
+## 2026-10-29 — differential harness
+
+- `tests/differential.rs`: discovers all actions in 12 fixtures and 2
+  normative spec examples; 13 actions / 740 exhaustive basis comparisons.
+  Six generated, hash-checked supplemental actions cover all gate families,
+  explicit allocation, memory effects, lexical regions and nested
+  controlled/adjoint calls with workspace: 190 further comparisons.
+- `tests/support/exact.rs`: independent std-only arbitrary-integer dyadic
+  arithmetic and exact symbolic amplitudes over Q(sqrt(2),i) with formal
+  exp(i*d), d dyadic radians. `tests/support/sim.rs`: sparse simulator over
+  arbitrary wire-count bit vectors, no amplitude pruning. Tests pin exact
+  cancellation, tiny nonzero support, phase, and dirty-workspace failure.
+- Simulation reads the executable QASM gate text, not the IR metadata.
+  Exact support and all workspace are checked; binary64 display amplitudes
+  compared with absolute tolerance 2e-12, including global phase. This is
+  phase-sensitive differential evidence, not a numerical proof/certificate.
+- Results: **19 actions, 930 basis comparisons, 930 agree, 0 diverge**.
+  Spec examples have no action rows; both are still discovered, parsed,
+  hash-checked, and covered by check agreement. Every divergence: none.
+- Whole-scope plan remains in `docs/PLAN.md`; next is M2: literal bounded
+  oracle construction, `oracle_call`/`qinplace`, classical specialisation,
+  and full static disciplines. ISA 0.9 remains an unaccepted draft.
+
+## Final local gates
+
+- `cargo test --offline`: 30 passed, 0 failed, 0 ignored.
+- `cargo fmt --check`: clean.
+- `cargo clippy --offline --all-targets -- -D warnings`: clean.
+- `git diff --check`: clean. Headless throughout, TMPDIR in `.tmp/`.
+- Additional red-green regression: generated while-loop flag names must not
+  shadow legal user bundle names. Internal names now use an ISA-inexpressible
+  `$` prefix. This resolved a lowering rejection, not an oracle divergence.
+- M1 epic and all five child beads closed; next bead `bennett-circuits-pk3`.
+  No pushes; no external repository edits or interpreter source imports.

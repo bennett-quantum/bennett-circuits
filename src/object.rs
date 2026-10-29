@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::json::Value;
 use crate::sha256::sha256_hex;
-use crate::{bail, Error, Result};
+use crate::{Error, Result, bail};
 
 pub const ISA_VERSION: &str = "0.8";
 
@@ -26,6 +26,8 @@ const SECTION_ORDER: [&str; 9] = [
     "certificate",
     "coverage",
 ];
+
+type ClosureSet = (Vec<String>, Vec<(String, Value)>, Vec<(String, Value)>);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
@@ -252,7 +254,7 @@ impl Object {
         let mut i = 1usize;
         let mut last_order: Option<usize> = None;
         while i < lines.len() {
-            if lines[i] != "" {
+            if !lines[i].is_empty() {
                 bail!(
                     "object: expected blank line before section at line {}, got {:?}",
                     i + 1,
@@ -274,7 +276,7 @@ impl Object {
             last_order = Some(order);
             i += 1;
             let mut body = Vec::new();
-            while i < lines.len() && lines[i] != "" {
+            while i < lines.len() && !lines[i].is_empty() {
                 body.push(lines[i].to_string());
                 i += 1;
             }
@@ -355,7 +357,9 @@ fn parse_header(line: &str) -> Result<Header> {
         ("target", &h.target),
     ] {
         if v != ISA_VERSION {
-            bail!("object: unsupported {k}={v}; this implementation is ISA {ISA_VERSION} (0.9 is drafted, not accepted)");
+            bail!(
+                "object: unsupported {k}={v}; this implementation is ISA {ISA_VERSION} (0.9 is drafted, not accepted)"
+            );
         }
     }
     Ok(h)
@@ -363,7 +367,10 @@ fn parse_header(line: &str) -> Result<Header> {
 
 fn parse_json_section(name: &str, body: &[String]) -> Result<Value> {
     if body.len() != 1 {
-        bail!("object: section {name} must be exactly one JCS line (§9.1), got {} lines", body.len());
+        bail!(
+            "object: section {name} must be exactly one JCS line (§9.1), got {} lines",
+            body.len()
+        );
     }
     let v = Value::parse(&body[0])?;
     if !matches!(v, Value::Object(_)) {
@@ -420,15 +427,33 @@ fn parse_symbols(body: &[String]) -> Result<Vec<Symbol>> {
             .and_then(Value::as_str)
             .ok_or_else(|| Error(format!("object: symbol {name} kind is not a string")))?
             .to_string();
-        if !["cc", "r", "oracle", "action", "perm_action", "lproc", "data"].contains(&kind.as_str()) {
+        if ![
+            "cc",
+            "r",
+            "oracle",
+            "action",
+            "perm_action",
+            "lproc",
+            "data",
+        ]
+        .contains(&kind.as_str())
+        {
             bail!("object: symbol {name} has unknown kind {kind:?} (§9.1)");
         }
         let hash = entry
             .get("interface_hash")
             .and_then(Value::as_str)
-            .ok_or_else(|| Error(format!("object: symbol {name} interface_hash is not a string")))?
+            .ok_or_else(|| {
+                Error(format!(
+                    "object: symbol {name} interface_hash is not a string"
+                ))
+            })?
             .to_string();
-        if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
+        if hash.len() != 64
+            || !hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
             bail!("object: symbol {name} interface_hash is not 64 lowercase hex");
         }
         out.push(Symbol {
@@ -473,14 +498,20 @@ fn parse_data(body: &[String]) -> Result<Vec<DataEntry>> {
             bail!("object: malformed data line {line:?} (§9.1 NAME SP HEX)");
         };
         if hex.len() % 2 != 0
-            || !hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            || !hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         {
             bail!("object: data {name:?} payload is not lowercase even-length hex (§16.1)");
         }
         let bytes = (0..hex.len() / 2)
             .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex checked"))
             .collect();
-        out.push(DataEntry { name: name.to_string(), hex: hex.to_string(), bytes });
+        out.push(DataEntry {
+            name: name.to_string(),
+            hex: hex.to_string(),
+            bytes,
+        });
     }
     Ok(out)
 }
@@ -621,7 +652,11 @@ fn parse_param(text: &str) -> Result<Param> {
     {
         bail!("object: parameter {text:?} has unknown role {r:?}");
     }
-    Ok(Param { name: name.trim().to_string(), ty, role })
+    Ok(Param {
+        name: name.trim().to_string(),
+        ty,
+        role,
+    })
 }
 
 fn parse_plist(token: &str) -> Result<Vec<Param>> {
@@ -632,7 +667,10 @@ fn parse_plist(token: &str) -> Result<Vec<Param>> {
     if inner.trim().is_empty() {
         return Ok(Vec::new());
     }
-    split_top(inner, ',').iter().map(|p| parse_param(p)).collect()
+    split_top(inner, ',')
+        .iter()
+        .map(|p| parse_param(p))
+        .collect()
 }
 
 fn parse_operand(token: &str) -> Result<Operand> {
@@ -705,9 +743,7 @@ fn parse_operand(token: &str) -> Result<Operand> {
 
 fn is_int_text(token: &str) -> bool {
     let t = token.strip_prefix('-').unwrap_or(token);
-    !t.is_empty()
-        && t.bytes().all(|b| b.is_ascii_digit())
-        && (t.len() == 1 || !t.starts_with('0'))
+    !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) && (t.len() == 1 || !t.starts_with('0'))
 }
 
 fn function_kind(line: &str) -> Option<(FnKind, usize)> {
@@ -733,11 +769,18 @@ fn parse_functions(body: &[String]) -> Result<Vec<Function>> {
     while i < body.len() {
         let start = i;
         let Some((kind, ntok)) = function_kind(&body[i]) else {
-            bail!("object: expected function header at functions line {}: {:?}", i + 1, body[i]);
+            bail!(
+                "object: expected function header at functions line {}: {:?}",
+                i + 1,
+                body[i]
+            );
         };
         let toks = tokenise(&body[i])?;
         if toks.len() != ntok + 1 + 5 {
-            bail!("object: function header {:?} does not have five parameter groups (§16.2)", body[i]);
+            bail!(
+                "object: function header {:?} does not have five parameter groups (§16.2)",
+                body[i]
+            );
         }
         let name = toks[ntok]
             .strip_prefix('@')
@@ -766,7 +809,15 @@ fn parse_functions(body: &[String]) -> Result<Vec<Function>> {
             bail!("object: function @{name} has no blocks (§16.2 function := fhead regs? block+)");
         }
         let canonical_bytes = body[start..i].join("\n");
-        functions.push(Function { kind, name, groups, regs, bounds, blocks, canonical_bytes });
+        functions.push(Function {
+            kind,
+            name,
+            groups,
+            regs,
+            bounds,
+            blocks,
+            canonical_bytes,
+        });
     }
     Ok(functions)
 }
@@ -786,13 +837,19 @@ fn parse_regs(line: &str) -> Result<(Vec<RegDecl>, Vec<u64>)> {
             let Some((name, ty)) = entry.split_once(':') else {
                 bail!("object: malformed regs entry {entry:?} in {line:?}");
             };
-            regs.push(RegDecl { name: name.trim().to_string(), ty: parse_type(ty)? });
+            regs.push(RegDecl {
+                name: name.trim().to_string(),
+                ty: parse_type(ty)?,
+            });
         }
     }
     let mut bounds = Vec::new();
     let tail = rest[close + 1..].trim();
     if !tail.is_empty() {
-        let Some(b) = tail.strip_prefix("bounds {").and_then(|s| s.strip_suffix('}')) else {
+        let Some(b) = tail
+            .strip_prefix("bounds {")
+            .and_then(|s| s.strip_suffix('}'))
+        else {
             bail!("object: malformed bounds in regs line {line:?}");
         };
         if !b.trim().is_empty() {
@@ -821,7 +878,14 @@ fn parse_block(body: &[String], start: usize) -> Result<(Block, usize)> {
     if instrs.is_empty() {
         bail!("object: block ^{name} has no instructions (§16.2)");
     }
-    Ok((Block { name: name.to_string(), params, instrs }, next))
+    Ok((
+        Block {
+            name: name.to_string(),
+            params,
+            instrs,
+        },
+        next,
+    ))
 }
 
 /// Parse instructions until a block/function boundary (depth 0) or a
@@ -887,8 +951,16 @@ fn parse_instr_line(line: &str, toks: &[String]) -> Result<Instr> {
     } else {
         (Vec::new(), toks[0].clone(), &toks[1..])
     };
-    let operands = rest.iter().map(|t| parse_operand(t)).collect::<Result<Vec<_>>>()?;
-    Ok(Instr { lhs, opcode, operands, children: Vec::new() })
+    let operands = rest
+        .iter()
+        .map(|t| parse_operand(t))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Instr {
+        lhs,
+        opcode,
+        operands,
+        children: Vec::new(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -909,7 +981,12 @@ fn widths(params: &[Param], ctx: &str) -> Result<Vec<Value>> {
         .map(|p| {
             p.ty.wire_width()
                 .map(|w| jint(u64::from(w)))
-                .ok_or_else(|| Error(format!("object: {ctx} parameter {:?} is not a wire/reg bundle", p.name)))
+                .ok_or_else(|| {
+                    Error(format!(
+                        "object: {ctx} parameter {:?} is not a wire/reg bundle",
+                        p.name
+                    ))
+                })
         })
         .collect()
 }
@@ -919,10 +996,12 @@ fn mem_sig(params: &[Param]) -> Result<Vec<Value>> {
         .iter()
         .map(|p| match p.ty {
             Type::Region(a, w) => {
-                let role = p
-                    .role
-                    .clone()
-                    .ok_or_else(|| Error(format!("object: region parameter {:?} has no role (§5.1)", p.name)))?;
+                let role = p.role.clone().ok_or_else(|| {
+                    Error(format!(
+                        "object: region parameter {:?} has no role (§5.1)",
+                        p.name
+                    ))
+                })?;
                 Ok(jobj(vec![
                     ("A", jint(u64::from(a))),
                     ("W", jint(u64::from(w))),
@@ -978,7 +1057,10 @@ pub fn derived_signature(f: &Function) -> Result<Value> {
             jobj(vec![
                 ("abi", Value::Str(ISA_VERSION.into())),
                 ("args", Value::Array(type_strings(g3)?)),
-                ("bounds", Value::Array(f.bounds.iter().map(|b| jint(*b)).collect())),
+                (
+                    "bounds",
+                    Value::Array(f.bounds.iter().map(|b| jint(*b)).collect()),
+                ),
                 ("in", Value::Array(widths(g1, "action in")?)),
                 ("kind", Value::Str(f.kind.symbol_kind().into())),
                 ("mem", Value::Array(mem_sig(g2)?)),
@@ -1100,16 +1182,26 @@ impl Object {
                     bail!("object: data symbol {:?} has no data line (§9.1)", sym.name);
                 };
                 if data_signature(entry) != sym.signature {
-                    bail!("object: data {:?} stored signature does not match its size", sym.name);
+                    bail!(
+                        "object: data {:?} stored signature does not match its size",
+                        sym.name
+                    );
                 }
             } else if !fn_names.contains(&sym.name) {
-                bail!("object: symbol {:?} ({}) has no function (§9.1)", sym.name, sym.kind);
+                bail!(
+                    "object: symbol {:?} ({}) has no function (§9.1)",
+                    sym.name,
+                    sym.kind
+                );
             }
         }
         for entry in &self.data {
             match self.symbol(&entry.name) {
                 Some(s) if s.kind == "data" => {}
-                _ => bail!("object: data line {:?} has no data symbol (§9.1)", entry.name),
+                _ => bail!(
+                    "object: data line {:?} has no data symbol (§9.1)",
+                    entry.name
+                ),
             }
         }
         // Layout: ptr_width agreement; globals are data symbols (§9.2).
@@ -1118,8 +1210,16 @@ impl Object {
                 "layout",
                 layout,
                 &[
-                    "A_tab", "H", "S_cells", "block_image", "globals", "heap_base",
-                    "heap_limit_max", "interface_regions", "null_size", "ptr_width",
+                    "A_tab",
+                    "H",
+                    "S_cells",
+                    "block_image",
+                    "globals",
+                    "heap_base",
+                    "heap_limit_max",
+                    "interface_regions",
+                    "null_size",
+                    "ptr_width",
                 ],
                 &[],
             )?;
@@ -1130,7 +1230,12 @@ impl Object {
             }
             if let Some(globals) = layout.get("globals").and_then(Value::as_object) {
                 for (g, gv) in globals {
-                    expect_keys(&format!("layout.globals.{g}"), gv, &["base", "image", "size"], &["base", "image", "size"])?;
+                    expect_keys(
+                        &format!("layout.globals.{g}"),
+                        gv,
+                        &["base", "image", "size"],
+                        &["base", "image", "size"],
+                    )?;
                     if gv.get("image").and_then(Value::as_str) != Some(g.as_str()) {
                         bail!("object: global {g:?} image is not its own name (§9.2)");
                     }
@@ -1149,9 +1254,7 @@ impl Object {
         // Every @reference resolves to a definition or an import.
         for f in &self.functions {
             for r in self.references(f) {
-                if self.symbol(&r).is_none()
-                    && !self.imports.iter().any(|i| i.name == r)
-                {
+                if self.symbol(&r).is_none() && !self.imports.iter().any(|i| i.name == r) {
                     bail!("object: @{} references unknown symbol @{r}", f.name);
                 }
             }
@@ -1220,7 +1323,9 @@ enum RefHash {
 
 fn layout_leaves(layout: &Value) -> Vec<(String, Value)> {
     let mut out = Vec::new();
-    let Some(map) = layout.as_object() else { return out };
+    let Some(map) = layout.as_object() else {
+        return out;
+    };
     for (k, v) in map {
         match k.as_str() {
             "globals" => {
@@ -1235,7 +1340,10 @@ fn layout_leaves(layout: &Value) -> Vec<(String, Value)> {
                     for (oracle, regions) in o {
                         if let Some(r) = regions.as_object() {
                             for (region, rv) in r {
-                                out.push((format!("interface_regions.{oracle}.{region}"), rv.clone()));
+                                out.push((
+                                    format!("interface_regions.{oracle}.{region}"),
+                                    rv.clone(),
+                                ));
                             }
                         }
                     }
@@ -1248,15 +1356,15 @@ fn layout_leaves(layout: &Value) -> Vec<(String, Value)> {
 }
 
 impl Object {
-    fn closure_data_and_leaves(
-        &self,
-        sym: &Symbol,
-    ) -> Result<(Vec<String>, Vec<(String, Value)>, Vec<(String, Value)>)> {
+    fn closure_data_and_leaves(&self, sym: &Symbol) -> Result<ClosureSet> {
         // (data names, layout leaves, device entries) for envelope 5a/5b/5c.
         let mut data_names: Vec<String> = Vec::new();
         let mut leaves: Vec<(String, Value)> = Vec::new();
         let mut device_entries: Vec<(String, Value)> = Vec::new();
-        let take_leaf = |path: &str, v: &Value, leaves: &mut Vec<(String, Value)>, data_names: &mut Vec<String>| {
+        let take_leaf = |path: &str,
+                         v: &Value,
+                         leaves: &mut Vec<(String, Value)>,
+                         data_names: &mut Vec<String>| {
             leaves.push((path.to_string(), v.clone()));
             if let Some(g) = path.strip_prefix("globals.")
                 && let Some(image) = v.get("image").and_then(Value::as_str)
@@ -1360,17 +1468,16 @@ impl Object {
         // Every named image must exist as a data entry.
         for name in &data_names {
             if self.data_entry(name).is_none() {
-                bail!("object: closure of {:?} names missing data image {name:?}", sym.name);
+                bail!(
+                    "object: closure of {:?} names missing data image {name:?}",
+                    sym.name
+                );
             }
         }
         Ok((data_names, leaves, device_entries))
     }
 
-    fn build_envelope(
-        &self,
-        sym: &Symbol,
-        resolve: &dyn Fn(&str) -> RefHash,
-    ) -> Result<Vec<u8>> {
+    fn build_envelope(&self, sym: &Symbol, resolve: &dyn Fn(&str) -> RefHash) -> Result<Vec<u8>> {
         let mut out = String::new();
         out.push_str(&format!("isa={}\n", self.header.isa));
         out.push_str(&format!("ptr_width={}\n", self.header.ptr_width));
@@ -1407,7 +1514,10 @@ impl Object {
                     out.push('\n');
                 }
                 RefHash::SccMember(_) => {} // intra-SCC: no part-6 line
-                RefHash::Missing => bail!("object: unresolved hash for @{r} while building @{} envelope", sym.name),
+                RefHash::Missing => bail!(
+                    "object: unresolved hash for @{r} while building @{} envelope",
+                    sym.name
+                ),
             }
         }
         Ok(out.into_bytes())
@@ -1424,7 +1534,9 @@ impl Object {
                 let refs = if s.kind == "data" {
                     Vec::new()
                 } else {
-                    self.function(&s.name).map(|f| self.references(f)).unwrap_or_default()
+                    self.function(&s.name)
+                        .map(|f| self.references(f))
+                        .unwrap_or_default()
                 };
                 (s.name.clone(), refs)
             })
@@ -1481,8 +1593,11 @@ impl Object {
                 let mut envelopes = Vec::new();
                 for m in scc.iter() {
                     let sym = self.symbol(m).expect("defined");
-                    let scc_pos: BTreeMap<&str, usize> =
-                        scc.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+                    let scc_pos: BTreeMap<&str, usize> = scc
+                        .iter()
+                        .enumerate()
+                        .map(|(i, n)| (n.as_str(), i))
+                        .collect();
                     let resolve = |r: &str| -> RefHash {
                         if let Some(i) = scc_pos.get(r) {
                             RefHash::SccMember(*i)
@@ -1564,7 +1679,9 @@ impl Object {
                     if s.kind == "data" {
                         Vec::new()
                     } else {
-                        self.function(&s.name).map(|f| self.references(f)).unwrap_or_default()
+                        self.function(&s.name)
+                            .map(|f| self.references(f))
+                            .unwrap_or_default()
                     },
                 )
             })
@@ -1576,8 +1693,11 @@ impl Object {
             .find(|c| c.iter().any(|m| m == name))
             .cloned()
             .unwrap_or_else(|| vec![name.to_string()]);
-        let scc_pos: BTreeMap<&str, usize> =
-            scc.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+        let scc_pos: BTreeMap<&str, usize> = scc
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.as_str(), i))
+            .collect();
         let resolve = |r: &str| -> RefHash {
             if let Some(i) = scc_pos.get(r) {
                 RefHash::SccMember(*i)
@@ -1597,7 +1717,11 @@ impl Object {
 
     pub fn object_hash(&self) -> String {
         let removable = ["schedule", "certificate", "coverage"];
-        if !self.section_spans.iter().any(|(n, _, _)| removable.contains(&n.as_str())) {
+        if !self
+            .section_spans
+            .iter()
+            .any(|(n, _, _)| removable.contains(&n.as_str()))
+        {
             return sha256_hex(self.text.as_bytes());
         }
         let mut lines: Vec<&str> = self.text.split('\n').collect();
@@ -1642,7 +1766,12 @@ impl Object {
         let unresolved_imports: Vec<String> = self.imports.iter().map(|i| i.name.clone()).collect();
         Ok(CheckReport {
             object_hash: self.object_hash(),
-            status: if unresolved_imports.is_empty() { "ok" } else { "unlinked" }.into(),
+            status: if unresolved_imports.is_empty() {
+                "ok"
+            } else {
+                "unlinked"
+            }
+            .into(),
             symbols,
             unresolved_imports,
         })
@@ -1655,7 +1784,12 @@ impl Object {
         let unresolved_imports: Vec<String> = self.imports.iter().map(|i| i.name.clone()).collect();
         Ok(CheckReport {
             object_hash: self.object_hash(),
-            status: if unresolved_imports.is_empty() { "ok" } else { "unlinked" }.into(),
+            status: if unresolved_imports.is_empty() {
+                "ok"
+            } else {
+                "unlinked"
+            }
+            .into(),
             symbols,
             unresolved_imports,
         })
@@ -1676,10 +1810,7 @@ fn replace_refs(
     let mut i = 0usize;
     let mut definition_done = false;
     while i < bytes.len() {
-        if bytes[i] == b'@'
-            && i + 1 < bytes.len()
-            && is_name_start(bytes[i + 1])
-        {
+        if bytes[i] == b'@' && i + 1 < bytes.len() && is_name_start(bytes[i + 1]) {
             let mut j = i + 1;
             while j < bytes.len() && is_name_char(bytes[j]) {
                 j += 1;
@@ -1703,7 +1834,11 @@ fn replace_refs(
             i = j;
         } else {
             // Copy one UTF-8 char.
-            let ch_len = canonical[i..].chars().next().expect("valid utf8").len_utf8();
+            let ch_len = canonical[i..]
+                .chars()
+                .next()
+                .expect("valid utf8")
+                .len_utf8();
             out.push_str(&canonical[i..i + ch_len]);
             i += ch_len;
         }

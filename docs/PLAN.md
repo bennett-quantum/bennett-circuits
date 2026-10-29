@@ -67,7 +67,7 @@ One Rust crate, std only. Pipeline:
   `export-qasm <object> <action>`.
 - `tests/` — maintained suites: identity/check agreement, lowering unit
   tests, QASM round-trip, and the differential harness with its own sparse
-  state-vector simulator (`tests/sim.rs`, used by `tests/differential.rs`).
+  state-vector simulator (`tests/support/sim.rs` with exact arithmetic in `tests/support/exact.rs`, used by `tests/differential.rs`).
 
 ### The IR
 
@@ -140,9 +140,13 @@ differential harness is test evidence, labelled as such.
 ### Exporters
 
 OpenQASM 3 first (milestone 1): hierarchical `gate` definitions, `ctrl @` /
-`negctrl @` / `inv @` modifiers, `stdgates.inc` base gates, intrinsic gate
-definitions for the bundle/memory ops per geometry, `// bc:` comments for
-allocation structure. QIR and Quil (milestone 5) lower from the same IR;
+`negctrl @` / `inv @` modifiers, `stdgates.inc` base gates, primitive expansions for bundle/memory ops per
+geometry, and versioned `// bc:` comments for the lossless IR (including
+allocation structure). Auxiliary operands make callee workspace explicit.
+The canonical IR parser checks executable text against metadata; a separate
+executable parser ignores the IR comments and simulates actual gate statements.
+A zero-wire identity uses one inert sentinel qubit to satisfy QASM's gate
+operand grammar. QIR and Quil (milestone 5) lower from the same IR;
 neither is an import format here.
 
 ## Milestones
@@ -218,3 +222,19 @@ milestone 1, each names where it lands:
 - New §16.3 examples 3–9 (including a positive borrow-frame vector) will be
   picked up automatically: both the check-agreement test and the differential
   harness discover objects and actions instead of listing them.
+
+## Milestone-1 verification result (2026-10-29)
+
+The corpus discovers every action from 12 fixtures and 2 spec example
+objects (the examples contain only oracles): 13 actions / 740 basis columns.
+Six supplemental actions add 190 columns covering every gate, explicit
+allocation, memory updates, lexical local regions and controlled/adjoint calls
+with workspace. Total: 19 actions / 930 columns, all agree, zero divergences.
+
+The simulator uses sparse bit-vector keys, arbitrary-size signed dyadic
+integers, Q(sqrt(2),i) coefficients, and formal exponentials of exact dyadic
+radians. Support, cancellation, and workspace cleanliness are exact; display
+amplitudes are compared phase-sensitively to the CLI's binary64 output at
+absolute tolerance 2e-12. This comparison is test evidence, not an interval
+proof or a certificate. All interface basis values are covered; borrowed
+wires start at zero as required by the CLI, not the full dirty domain D.

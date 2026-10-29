@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::*;
 use crate::object::{FnKind, Function, Instr, Object, Operand, Type};
-use crate::{bail, Error, Result};
+use crate::{Error, Result, bail};
 
 /// Lower `@action` and every action it transitively calls.
 pub fn lower_program(obj: &Object, action: &str) -> Result<Program> {
@@ -20,7 +20,10 @@ pub fn lower_program(obj: &Object, action: &str) -> Result<Program> {
         active: Vec::new(),
     };
     lowerer.lower_named(action)?;
-    Ok(Program { circuits: lowerer.done, top: action.to_string() })
+    Ok(Program {
+        circuits: lowerer.done,
+        top: action.to_string(),
+    })
 }
 
 struct Lowerer<'a> {
@@ -34,10 +37,14 @@ impl<'a> Lowerer<'a> {
         if self.active.iter().any(|n| n == name) {
             bail!("lower: action call graph cycle through @{name} (§5.1: acyclic)");
         }
-        if self.done.iter().any(|c| c.name == name) { return Ok(()); }
+        if self.done.iter().any(|c| c.name == name) {
+            return Ok(());
+        }
         let Some(f) = self.obj.function(name) else {
             if self.obj.imports.iter().any(|i| i.name == name) {
-                bail!("unimplemented: lowering imported action @{name} without a body (milestone 2)");
+                bail!(
+                    "unimplemented: lowering imported action @{name} without a body (milestone 2)"
+                );
             }
             bail!("lower: unknown action @{name}");
         };
@@ -53,7 +60,9 @@ impl<'a> Lowerer<'a> {
         // Discover callees in body order and lower them too.
         let callees = fb.callees.clone();
         let circuit = fb.finish()?;
-        for callee in callees { self.lower_named(&callee)?; }
+        for callee in callees {
+            self.lower_named(&callee)?;
+        }
         self.active.pop();
         self.done.insert(0, circuit);
         Ok(())
@@ -105,33 +114,57 @@ impl<'a> FnLower<'a> {
         };
         let mut bundles = BTreeMap::new();
         let mut live = BTreeSet::new();
-        let declare = |name: &str, width: u32, bundles: &mut BTreeMap<String, (u32, BundleKind)>, live: &mut BTreeSet<String>| {
+        let declare = |name: &str,
+                       width: u32,
+                       bundles: &mut BTreeMap<String, (u32, BundleKind)>,
+                       live: &mut BTreeSet<String>| {
             bundles.insert(name.to_string(), (width, BundleKind::Interface));
             live.insert(name.to_string());
         };
         for p in &f.groups[0] {
             let w = wire_width_of(&p.ty, &p.name)?;
-            circuit.mut_bundles.push(Bundle { name: p.name.clone(), width: w, role: Role::Mut });
+            circuit.mut_bundles.push(Bundle {
+                name: p.name.clone(),
+                width: w,
+                role: Role::Mut,
+            });
             declare(&p.name, w, &mut bundles, &mut live);
         }
         for p in &f.groups[1] {
             let w = wire_width_of(&p.ty, &p.name)?;
-            circuit.in_bundles.push(Bundle { name: p.name.clone(), width: w, role: Role::In });
+            circuit.in_bundles.push(Bundle {
+                name: p.name.clone(),
+                width: w,
+                role: Role::In,
+            });
             declare(&p.name, w, &mut bundles, &mut live);
         }
         for p in &f.groups[2] {
             let Type::Region(a, w) = p.ty else {
-                bail!("lower: @{} mem parameter {:?} is not a region", f.name, p.name);
+                bail!(
+                    "lower: @{} mem parameter {:?} is not a region",
+                    f.name,
+                    p.name
+                );
             };
             let role = match p.role.as_deref() {
                 Some("mut") => Role::Mut,
                 Some("in") => Role::In,
                 other => bail!("lower: @{} mem {:?} has role {other:?}", f.name, p.name),
             };
-            let m = MemBundle { name: p.name.clone(), addr_width: a, cell_width: w, role };
+            let m = MemBundle {
+                name: p.name.clone(),
+                addr_width: a,
+                cell_width: w,
+                role,
+            };
             let total = m.width();
             if total > u64::from(u32::MAX) {
-                bail!("lower: @{} region {:?} too large ({total} wires, host limit)", f.name, p.name);
+                bail!(
+                    "lower: @{} region {:?} too large ({total} wires, host limit)",
+                    f.name,
+                    p.name
+                );
             }
             declare(&p.name, total as u32, &mut bundles, &mut live);
             circuit.mem.push(m);
@@ -156,14 +189,19 @@ impl<'a> FnLower<'a> {
     }
 
     fn resolve(&self, textual: &str) -> String {
-        self.rename.get(textual).cloned().unwrap_or_else(|| textual.to_string())
+        self.rename
+            .get(textual)
+            .cloned()
+            .unwrap_or_else(|| textual.to_string())
     }
 
     fn width(&self, physical: &str) -> Result<u32> {
-        self.bundles
-            .get(physical)
-            .map(|(w, _)| *w)
-            .ok_or_else(|| Error(format!("lower: @{} unknown bundle {physical:?}", self.f.name)))
+        self.bundles.get(physical).map(|(w, _)| *w).ok_or_else(|| {
+            Error(format!(
+                "lower: @{} unknown bundle {physical:?}",
+                self.f.name
+            ))
+        })
     }
 
     fn require_live(&self, physical: &str) -> Result<()> {
@@ -214,7 +252,10 @@ impl<'a> FnLower<'a> {
         self.require_live(&physical)?;
         let (_, kind) = self.bundles[&physical];
         if kind != want {
-            bail!("lower: @{} {what} of {textual:?} does not match its allocation kind", self.f.name);
+            bail!(
+                "lower: @{} {what} of {textual:?} does not match its allocation kind",
+                self.f.name
+            );
         }
         self.live.remove(&physical);
         Ok(physical)
@@ -227,7 +268,10 @@ impl<'a> FnLower<'a> {
                 self.require_live(&p)?;
                 Ok(p)
             }
-            other => bail!("lower: @{} {what} operand must be a bundle name, got {other:?}", self.f.name),
+            other => bail!(
+                "lower: @{} {what} operand must be a bundle name, got {other:?}",
+                self.f.name
+            ),
         }
     }
 
@@ -237,7 +281,10 @@ impl<'a> FnLower<'a> {
                 let p = self.resolve(n);
                 self.require_live(&p)?;
                 if *i >= self.width(&p)? {
-                    bail!("lower: @{} wire index {i} out of range for {n:?}", self.f.name);
+                    bail!(
+                        "lower: @{} wire index {i} out of range for {n:?}",
+                        self.f.name
+                    );
                 }
                 Ok(QubitRef::new(&p, *i))
             }
@@ -245,11 +292,17 @@ impl<'a> FnLower<'a> {
                 let p = self.resolve(n);
                 self.require_live(&p)?;
                 if self.width(&p)? != 1 {
-                    bail!("lower: @{} {what} operand {n:?} is a multi-wire bundle; index it", self.f.name);
+                    bail!(
+                        "lower: @{} {what} operand {n:?} is a multi-wire bundle; index it",
+                        self.f.name
+                    );
                 }
                 Ok(QubitRef::new(&p, 0))
             }
-            other => bail!("lower: @{} {what} operand must be a wire, got {other:?}", self.f.name),
+            other => bail!(
+                "lower: @{} {what} operand must be a wire, got {other:?}",
+                self.f.name
+            ),
         }
     }
 
@@ -267,10 +320,19 @@ impl<'a> FnLower<'a> {
         Ok(())
     }
 
-    fn emit_gate(&mut self, gate: BaseGate, own_controls: Vec<QubitRef>, targets: Vec<QubitRef>) -> Result<()> {
+    fn emit_gate(
+        &mut self,
+        gate: BaseGate,
+        own_controls: Vec<QubitRef>,
+        targets: Vec<QubitRef>,
+    ) -> Result<()> {
         let mut controls = self.controls();
         controls.extend(own_controls.into_iter().map(Ctrl::pos));
-        let inst = GateInst { gate, controls, targets };
+        let inst = GateInst {
+            gate,
+            controls,
+            targets,
+        };
         self.check_distinct(&inst, "gate")?;
         self.circuit.body.push(Node::Gate(inst));
         Ok(())
@@ -294,8 +356,12 @@ fn int_literal(op: &Operand, row: &str, f: &str) -> Result<u64> {
 impl<'a> FnLower<'a> {
     fn declare_regions(&mut self, instrs: &[Instr]) -> Result<()> {
         for i in instrs {
-            if i.opcode == "qregion" { self.lower_qregion(i)?; }
-            for child in &i.children { self.declare_regions(child)?; }
+            if i.opcode == "qregion" {
+                self.lower_qregion(i)?;
+            }
+            for child in &i.children {
+                self.declare_regions(child)?;
+            }
         }
         Ok(())
     }
@@ -309,7 +375,10 @@ impl<'a> FnLower<'a> {
 
     fn finish(mut self) -> Result<Circuit> {
         if !self.pred.is_empty() {
-            bail!("lower: @{} predicate stack non-empty at exit (§3.5)", self.f.name);
+            bail!(
+                "lower: @{} predicate stack non-empty at exit (§3.5)",
+                self.f.name
+            );
         }
         // Local regions: reverse image gates and release, reverse order
         // (§4.6). The body must have restored the cells to their image;
@@ -336,7 +405,10 @@ impl<'a> FnLower<'a> {
         }
         for (name, _) in self.circuit.interface_bundles() {
             if !self.live.contains(&name) {
-                bail!("lower: @{} interface bundle {name:?} consumed by the body", self.f.name);
+                bail!(
+                    "lower: @{} interface bundle {name:?} consumed by the body",
+                    self.f.name
+                );
             }
         }
         self.circuit.check_widths()?;
@@ -364,14 +436,22 @@ impl<'a> FnLower<'a> {
 
     fn lhs1(&self, instr: &Instr) -> Result<String> {
         if instr.lhs.len() != 1 {
-            bail!("lower: @{} {} expects exactly one result", self.f.name, instr.opcode);
+            bail!(
+                "lower: @{} {} expects exactly one result",
+                self.f.name,
+                instr.opcode
+            );
         }
         Ok(instr.lhs[0].clone())
     }
 
     fn no_lhs_children(&self, instr: &Instr) -> Result<()> {
         if !instr.children.is_empty() {
-            bail!("lower: @{} {} takes no brace group", self.f.name, instr.opcode);
+            bail!(
+                "lower: @{} {} takes no brace group",
+                self.f.name,
+                instr.opcode
+            );
         }
         Ok(())
     }
@@ -379,9 +459,9 @@ impl<'a> FnLower<'a> {
     fn angle(&self, instr: &Instr) -> Result<f64> {
         match &instr.operands[0] {
             Operand::Float(t) | Operand::Int(t) => {
-                let v: f64 = t.parse().map_err(|_| {
-                    Error(format!("lower: @{} bad angle {t:?}", self.f.name))
-                })?;
+                let v: f64 = t
+                    .parse()
+                    .map_err(|_| Error(format!("lower: @{} bad angle {t:?}", self.f.name)))?;
                 if !v.is_finite() {
                     bail!("lower: @{} non-finite angle {t:?} (§3.1)", self.f.name);
                 }
@@ -435,13 +515,25 @@ impl<'a> FnLower<'a> {
                 self.no_lhs_children(instr)?;
                 self.expect_operands(instr, 2)?;
                 let Operand::List(cs) = &instr.operands[0] else {
-                    bail!("lower: @{} mcx controls must be a parenthesised list", self.f.name);
+                    bail!(
+                        "lower: @{} mcx controls must be a parenthesised list",
+                        self.f.name
+                    );
                 };
                 let mut ctrls = Vec::new();
                 for c in cs.clone() {
-                    let operand = if let Some((name, index)) = c.strip_suffix(']').and_then(|s| s.split_once('[')) {
-                        Operand::Indexed(name.into(), index.parse().map_err(|_| Error("lower: invalid mcx index".into()))?)
-                    } else { Operand::Name(c) };
+                    let operand = if let Some((name, index)) =
+                        c.strip_suffix(']').and_then(|s| s.split_once('['))
+                    {
+                        Operand::Indexed(
+                            name.into(),
+                            index
+                                .parse()
+                                .map_err(|_| Error("lower: invalid mcx index".into()))?,
+                        )
+                    } else {
+                        Operand::Name(c)
+                    };
                     ctrls.push(self.wire_operand(&operand, op)?);
                 }
                 let t = self.wire_operand(&instr.operands[1], op)?;
@@ -465,13 +557,24 @@ impl<'a> FnLower<'a> {
                 self.expect_operands(instr, 2)?;
                 let class = match &instr.operands[0] {
                     Operand::Name(n) => n.clone(),
-                    other => bail!("lower: @{} {op} class must be a name, got {other:?}", self.f.name),
+                    other => bail!(
+                        "lower: @{} {op} class must be a name, got {other:?}",
+                        self.f.name
+                    ),
                 };
                 let n = int_literal(&instr.operands[1], op, &self.f.name)?;
-                let width = u32::try_from(n)
-                    .map_err(|_| Error(format!("lower: @{} {op} count too large (host limit)", self.f.name)))?;
+                let width = u32::try_from(n).map_err(|_| {
+                    Error(format!(
+                        "lower: @{} {op} count too large (host limit)",
+                        self.f.name
+                    ))
+                })?;
                 let dst = self.lhs1(instr)?;
-                let kind = if op == "qalloc" { WsKind::Clean } else { WsKind::Borrowed };
+                let kind = if op == "qalloc" {
+                    WsKind::Clean
+                } else {
+                    WsKind::Borrowed
+                };
                 self.produce(&dst, width, kind, &class);
                 Ok(())
             }
@@ -527,7 +630,11 @@ impl<'a> FnLower<'a> {
                 }
                 let controls = self.controls();
                 if op == "qxor" {
-                    self.circuit.body.push(Node::Xor { src: a, tgt: b, controls });
+                    self.circuit.body.push(Node::Xor {
+                        src: a,
+                        tgt: b,
+                        controls,
+                    });
                 } else {
                     self.circuit.body.push(Node::Exch { a, b, controls });
                 }
@@ -543,7 +650,12 @@ impl<'a> FnLower<'a> {
                 let dst = self.lhs1(instr)?;
                 let dst = self.produce(&dst, cell_w, WsKind::Clean, "any");
                 let controls = self.controls();
-                self.circuit.body.push(Node::Load { region, addr, dst, controls });
+                self.circuit.body.push(Node::Load {
+                    region,
+                    addr,
+                    dst,
+                    controls,
+                });
                 Ok(())
             }
             "qunload" => {
@@ -555,7 +667,12 @@ impl<'a> FnLower<'a> {
                 };
                 let dst = self.consume(&d.clone(), BundleKind::CleanWs, "qunload")?;
                 let controls = self.controls();
-                self.circuit.body.push(Node::Unload { region, addr, dst, controls });
+                self.circuit.body.push(Node::Unload {
+                    region,
+                    addr,
+                    dst,
+                    controls,
+                });
                 Ok(())
             }
             "qstore" | "qexchm" => {
@@ -568,9 +685,19 @@ impl<'a> FnLower<'a> {
                 }
                 let controls = self.controls();
                 if op == "qstore" {
-                    self.circuit.body.push(Node::Store { region, addr, val, controls });
+                    self.circuit.body.push(Node::Store {
+                        region,
+                        addr,
+                        val,
+                        controls,
+                    });
                 } else {
-                    self.circuit.body.push(Node::ExchM { region, addr, val, controls });
+                    self.circuit.body.push(Node::ExchM {
+                        region,
+                        addr,
+                        val,
+                        controls,
+                    });
                 }
                 Ok(())
             }
@@ -604,9 +731,18 @@ impl<'a> FnLower<'a> {
         }
     }
 
-    fn region_and_addr(&self, instr: &Instr, ri: usize, ai: usize) -> Result<(String, String, u32)> {
+    fn region_and_addr(
+        &self,
+        instr: &Instr,
+        ri: usize,
+        ai: usize,
+    ) -> Result<(String, String, u32)> {
         let Operand::Name(r) = &instr.operands[ri] else {
-            bail!("lower: @{} {} region must be a name", self.f.name, instr.opcode);
+            bail!(
+                "lower: @{} {} region must be a name",
+                self.f.name,
+                instr.opcode
+            );
         };
         let region = self.resolve(r);
         self.require_live(&region)?;
@@ -614,7 +750,10 @@ impl<'a> FnLower<'a> {
             bail!("lower: @{} {r:?} is not a region", self.f.name);
         };
         if a_w >= 26 {
-            bail!("lower: @{} region {r:?} address width {a_w} too large (host limit)", self.f.name);
+            bail!(
+                "lower: @{} region {r:?} address width {a_w} too large (host limit)",
+                self.f.name
+            );
         }
         let addr = self.bundle_operand(&instr.operands[ai], &instr.opcode)?;
         if self.width(&addr)? != a_w {
@@ -636,16 +775,26 @@ impl<'a> FnLower<'a> {
         let Operand::Name(name) = &instr.operands[0] else {
             bail!("lower: @{} qregion name must be a name", self.f.name);
         };
-        if self.bundles.contains_key(name) { bail!("lower: duplicate local region {name:?}"); }
+        if self.bundles.contains_key(name) {
+            bail!("lower: duplicate local region {name:?}");
+        }
         let a = int_literal(&instr.operands[1], "qregion", &self.f.name)?;
         let w = int_literal(&instr.operands[2], "qregion", &self.f.name)?;
         if a >= 26 {
-            bail!("lower: @{} qregion address width {a} too large (host limit)", self.f.name);
+            bail!(
+                "lower: @{} qregion address width {a} too large (host limit)",
+                self.f.name
+            );
         }
         let cells = 1u64 << a;
-        let total = cells.checked_mul(w).ok_or_else(|| Error("lower: qregion size overflow".into()))?;
+        let total = cells
+            .checked_mul(w)
+            .ok_or_else(|| Error("lower: qregion size overflow".into()))?;
         if total > u64::from(u32::MAX) {
-            bail!("lower: @{} qregion too large ({total} wires, host limit)", self.f.name);
+            bail!(
+                "lower: @{} qregion too large ({total} wires, host limit)",
+                self.f.name
+            );
         }
         // Image bits: byte k contributes bits [8k, 8k+8) (§4.6).
         let mut set_bits: Vec<u32> = Vec::new();
@@ -654,7 +803,10 @@ impl<'a> FnLower<'a> {
                 bail!("lower: @{} qregion image must be @data", self.f.name);
             };
             let Some(entry) = self.obj.data_entry(image) else {
-                bail!("lower: @{} qregion image @{image} has no data entry", self.f.name);
+                bail!(
+                    "lower: @{} qregion image @{image} has no data entry",
+                    self.f.name
+                );
             };
             if (entry.bytes.len() as u64) * 8 != total {
                 bail!(
@@ -692,14 +844,19 @@ impl<'a> FnLower<'a> {
     fn lower_scoped(&mut self, body: &[Instr]) -> Result<()> {
         let pred = self.pred.clone();
         self.lower_seq(body, true)?;
-        if self.pred != pred { bail!("lower: unbalanced predicate stack in structured body (§3.5)"); }
+        if self.pred != pred {
+            bail!("lower: unbalanced predicate stack in structured body (§3.5)");
+        }
         Ok(())
     }
 
     fn lower_qif(&mut self, instr: &Instr) -> Result<()> {
         self.expect_operands(instr, 1)?;
         if instr.children.is_empty() || instr.children.len() > 2 {
-            bail!("lower: @{} qif expects one or two brace groups", self.f.name);
+            bail!(
+                "lower: @{} qif expects one or two brace groups",
+                self.f.name
+            );
         }
         let w = self.wire_operand(&instr.operands[0], "qif")?;
         // §4.6 expansion, verbatim.
@@ -727,7 +884,10 @@ impl<'a> FnLower<'a> {
             1 => {
                 let n = int_literal(&instr.operands[0], "qloop", &self.f.name)?;
                 if n > 1_000_000 {
-                    bail!("lower: @{} qloop count {n} too large (host limit)", self.f.name);
+                    bail!(
+                        "lower: @{} qloop count {n} too large (host limit)",
+                        self.f.name
+                    );
                 }
                 for _ in 0..n {
                     self.lower_scoped(&body)?;
@@ -745,15 +905,27 @@ impl<'a> FnLower<'a> {
                 }
                 let cond = self.bundle_operand(&instr.operands[2], "qloop while")?;
                 if u64::from(self.width(&cond)?) != n {
-                    bail!("lower: @{} qloop while cond width must equal the trip count (§4.6)", self.f.name);
+                    bail!(
+                        "lower: @{} qloop while cond width must equal the trip count (§4.6)",
+                        self.f.name
+                    );
                 }
                 let n = n as u32;
                 let mut flags = Vec::new();
                 for i in 0..n {
-                    flags.push(self.produce(&format!("qloopwhile.flag{}", i + 1), 1, WsKind::Clean, "any"));
+                    flags.push(self.produce(
+                        &format!("$qloopwhile.flag{}", i + 1),
+                        1,
+                        WsKind::Clean,
+                        "any",
+                    ));
                 }
                 let cond_at = |i: u32| QubitRef::new(&cond, i);
-                self.emit_gate(BaseGate::X, vec![cond_at(0)], vec![QubitRef::new(&flags[0], 0)])?;
+                self.emit_gate(
+                    BaseGate::X,
+                    vec![cond_at(0)],
+                    vec![QubitRef::new(&flags[0], 0)],
+                )?;
                 for i in 0..n {
                     self.pred.push(QubitRef::new(&flags[i as usize], 0));
                     self.lower_scoped(&body)?;
@@ -773,7 +945,11 @@ impl<'a> FnLower<'a> {
                         vec![QubitRef::new(&flags[i as usize], 0)],
                     )?;
                 }
-                self.emit_gate(BaseGate::X, vec![cond_at(0)], vec![QubitRef::new(&flags[0], 0)])?;
+                self.emit_gate(
+                    BaseGate::X,
+                    vec![cond_at(0)],
+                    vec![QubitRef::new(&flags[0], 0)],
+                )?;
                 for flag in flags {
                     self.live.remove(&flag);
                 }
@@ -821,7 +997,10 @@ impl<'a> FnLower<'a> {
             "oracle_call" => bail!("unimplemented: oracle_call (milestone 2)"),
             "action_call" => {
                 if operands.len() != 5 {
-                    bail!("lower: @{} action_call expects callee and four lists (§4.7)", self.f.name);
+                    bail!(
+                        "lower: @{} action_call expects callee and four lists (§4.7)",
+                        self.f.name
+                    );
                 }
                 let Operand::Sym(callee) = operands[0].clone() else {
                     bail!("lower: @{} action_call callee must be @name", self.f.name);
@@ -830,7 +1009,10 @@ impl<'a> FnLower<'a> {
                     .iter()
                     .map(|o| match o {
                         Operand::List(l) => Ok(l.clone()),
-                        other => bail!("lower: @{} action_call argument must be a list, got {other:?}", self.f.name),
+                        other => bail!(
+                            "lower: @{} action_call argument must be a list, got {other:?}",
+                            self.f.name
+                        ),
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let (muts, ins, mems, cargs) = (&lists[0], &lists[1], &lists[2], &lists[3]);
@@ -841,30 +1023,45 @@ impl<'a> FnLower<'a> {
                     bail!("lower: @{} calls unknown action @{callee}", self.f.name);
                 };
                 if !cf.is_action() {
-                    bail!("lower: @{} action_call target @{callee} is not an action", self.f.name);
+                    bail!(
+                        "lower: @{} action_call target @{callee} is not an action",
+                        self.f.name
+                    );
                 }
                 if !cf.groups[3].is_empty() {
-                    bail!("unimplemented: action_call to @{callee} with classical parameters (milestone 2)");
+                    bail!(
+                        "unimplemented: action_call to @{callee} with classical parameters (milestone 2)"
+                    );
                 }
                 // Width-check against the callee header.
                 let mut args: Vec<String> = Vec::new();
-                for (actuals, formals, group) in [
-                    (muts, &cf.groups[0], "mut"),
-                    (ins, &cf.groups[1], "in"),
-                ] {
+                for (actuals, formals, group) in
+                    [(muts, &cf.groups[0], "mut"), (ins, &cf.groups[1], "in")]
+                {
                     if actuals.len() != formals.len() {
-                        bail!("lower: @{} action_call @{callee} {group} arity mismatch", self.f.name);
+                        bail!(
+                            "lower: @{} action_call @{callee} {group} arity mismatch",
+                            self.f.name
+                        );
                     }
                     for (a, formal) in actuals.iter().zip(formals) {
                         let p = self.bundle_operand(&Operand::Name(a.clone()), "action_call")?;
-                        if u64::from(self.width(&p)?) != u64::from(wire_width_of(&formal.ty, &formal.name)?) {
-                            bail!("lower: @{} action_call @{callee} {group} width mismatch on {a:?}", self.f.name);
+                        if u64::from(self.width(&p)?)
+                            != u64::from(wire_width_of(&formal.ty, &formal.name)?)
+                        {
+                            bail!(
+                                "lower: @{} action_call @{callee} {group} width mismatch on {a:?}",
+                                self.f.name
+                            );
                         }
                         args.push(p);
                     }
                 }
                 if mems.len() != cf.groups[2].len() {
-                    bail!("lower: @{} action_call @{callee} mem arity mismatch", self.f.name);
+                    bail!(
+                        "lower: @{} action_call @{callee} mem arity mismatch",
+                        self.f.name
+                    );
                 }
                 for (a, formal) in mems.iter().zip(&cf.groups[2]) {
                     let Type::Region(fa, fw) = formal.ty else {
@@ -873,7 +1070,10 @@ impl<'a> FnLower<'a> {
                     let p = self.resolve(a);
                     self.require_live(&p)?;
                     if self.circuit.region_geom(&p) != Some((fa, fw)) {
-                        bail!("lower: @{} action_call @{callee} mem geometry mismatch on {a:?}", self.f.name);
+                        bail!(
+                            "lower: @{} action_call @{callee} mem geometry mismatch on {a:?}",
+                            self.f.name
+                        );
                     }
                     args.push(p);
                 }
@@ -884,10 +1084,18 @@ impl<'a> FnLower<'a> {
                 if !self.callees.contains(&callee) {
                     self.callees.push(callee.clone());
                 }
-                self.circuit.body.push(Node::Call { callee, adjoint, controls, args });
+                self.circuit.body.push(Node::Call {
+                    callee,
+                    adjoint,
+                    controls,
+                    args,
+                });
                 Ok(())
             }
-            other => bail!("lower: @{} {other:?} is not a region call (§4.7)", self.f.name),
+            other => bail!(
+                "lower: @{} {other:?} is not a region call (§4.7)",
+                self.f.name
+            ),
         }
     }
 }

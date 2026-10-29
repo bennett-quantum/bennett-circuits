@@ -5,9 +5,9 @@
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
+use bennett_circuits::Result;
 use bennett_circuits::json::Value;
 use bennett_circuits::object::{CheckReport, Object};
-use bennett_circuits::Result;
 
 fn report_json(report: &CheckReport) -> Value {
     let symbols: BTreeMap<String, Value> = report
@@ -30,7 +30,10 @@ fn report_json(report: &CheckReport) -> Value {
         })
         .collect();
     let top: BTreeMap<String, Value> = [
-        ("object_hash".to_string(), Value::Str(report.object_hash.clone())),
+        (
+            "object_hash".to_string(),
+            Value::Str(report.object_hash.clone()),
+        ),
         ("status".to_string(), Value::Str(report.status.clone())),
         ("symbols".to_string(), Value::Object(symbols)),
         (

@@ -6,10 +6,10 @@
 pub mod flatten;
 pub mod ir;
 mod ir_codec;
-pub mod qasm;
 pub mod json;
 pub mod lower;
 pub mod object;
+pub mod qasm;
 pub mod sha256;
 
 /// Crate version string.
