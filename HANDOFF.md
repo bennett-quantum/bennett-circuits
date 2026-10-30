@@ -38,3 +38,8 @@ CC imported quantum signatures, and non-permutation call-boundary window
 events implemented red-green. New witness agrees with reference (now 94
 check comparisons in the documented overlapping categories). M2 is still
 in progress; full symbolic actions/certificate replay and A/B CLI remain.
+
+Suite A now passes 21/0/0 using implemented run-cc and classical reverse
+commands; tests/diagnostics.rs retains the published acceptance probes.
+Independent CC/R history uses delta undo and marks cancelled segments.
+B reverse/step-check and the remaining symbolic/certificate work stay M2.

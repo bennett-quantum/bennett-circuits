@@ -346,3 +346,19 @@ No observed reference disagreement, so no deciding-spec divergence to report.
 - Focused checks: 20 static checker tests and 2 new domain tests pass;
   conformance-object verdict/citation agreement remains 42/42. Full gates
   and conformance reruns follow. M2 remains in progress; pk3/.2 stay open.
+
+## 2026-10-30 — CC/R execution and history acceptance
+
+- Red: all Suite A command probes failed because run-cc/reverse were absent.
+  Added an independent std-only CC/R diagnostic executor from §§3.4/7.1/7.3/7.4:
+  arithmetic, CFG/block parameters, calls, dynamic definition deltas, memory,
+  allocation, device effects, host replies, register handles/views, action
+  circuits and Born measurement. Uncall reverses recorded deltas and marks
+  segments; cancelled nested segments are never replayed or undone twice.
+- Whole-run reversal actually traverses history and compares the restored
+  state to entry. Measurements are rejected with E_NOT_REVERSIBLE (§10).
+- Published Suite A: **21 pass / 0 fail / 0 unavailable**, exit 0. The same
+  21 probes are a maintained CLI test. Strict Clippy passes. The quantum
+  diagnostic state uses binary64 amplitudes; it is not a certificate checker
+  or rigorous numerical proof. Unsupported entry/call argument types fail
+  explicitly rather than being coerced. This does not complete M2.

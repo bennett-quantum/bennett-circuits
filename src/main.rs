@@ -454,6 +454,24 @@ fn run_basis(args: &[String]) -> Result<()> {
 }
 
 fn run(args: &[String]) -> Result<()> {
+    if matches!(args.first().map(String::as_str), Some("run-cc" | "reverse")) && args.len() >= 3 {
+        let o = load(&args[1])?;
+        o.check()?;
+        let name = args[2].trim_start_matches('@');
+        if o.function(name).is_some_and(|f| {
+            matches!(
+                f.kind,
+                bennett_circuits::object::FnKind::Cc | bennett_circuits::object::FnKind::R
+            )
+        }) {
+            println!(
+                "{}",
+                bennett_circuits::classical::run(&o, name, &args[3..], args[0] == "reverse")?
+                    .to_jcs()
+            );
+            return Ok(());
+        }
+    }
     match args.first().map(String::as_str) {
         Some("run-oracle"|"run-action") if args.len()>=3 => run_basis(args),
         Some("check") if args.len() == 2 => {

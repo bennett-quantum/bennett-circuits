@@ -5,6 +5,7 @@
 
 mod borrow;
 mod checker;
+pub mod classical;
 pub mod flatten;
 pub mod ir;
 mod ir_codec;
