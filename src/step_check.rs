@@ -126,7 +126,7 @@ fn direct(
                     .ok_or_else(|| Error(format!("step-check: unknown {n}"))),
                 Operand::Int(n) => Ok((
                     n.parse()
-                        .map_err(|_| Error("step-check: literal host limit".into()))?,
+                        .map_err(|_| Error("unimplemented: §14.1 direct step-check literals wider than 128 bits (milestone 6)".into()))?,
                     o.header.ptr_width,
                 )),
                 _ => bail!("step-check: integer operand"),

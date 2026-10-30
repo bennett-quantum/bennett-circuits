@@ -1,4 +1,4 @@
-//! Lossless v1 QASM comment metadata. Angles are round-trip decimal strings.
+//! Lossless v2 QASM comment metadata. Angles are round-trip decimal strings.
 use crate::{Error, Result, ir::*, json::Value as V};
 fn a(xs: impl IntoIterator<Item = V>) -> V {
     V::Array(xs.into_iter().collect())
@@ -258,7 +258,7 @@ fn rbundles(v: &V) -> Result<Vec<Bundle>> {
 }
 pub(crate) fn encode(p: &Program) -> V {
     a([
-        s("bc-ir-1"),
+        s("bc-ir-2"),
         s(&p.top),
         a(p.circuits.iter().map(|c| {
             a([
@@ -291,7 +291,7 @@ pub(crate) fn encode(p: &Program) -> V {
 }
 pub(crate) fn decode(v: &V) -> Result<Program> {
     let p = fields(v, 3)?;
-    if st(&p[0])? != "bc-ir-1" {
+    if st(&p[0])? != "bc-ir-2" {
         return Err(Error("QASM metadata: bad version".into()));
     }
     let circuits = list(&p[2])?

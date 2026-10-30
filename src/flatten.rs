@@ -52,7 +52,20 @@ pub(crate) fn flatten_allocations(
     let (f, e, a, _) = flatten_contexts(program)?;
     Ok((f, e, a))
 }
-pub(crate) type Contexts = Vec<usize>;
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryOp {
+    pub start: usize,
+    pub end: usize,
+    pub op: String,
+    pub a: u32,
+    pub w: u32,
+    pub controls: usize,
+}
+#[derive(Default)]
+pub(crate) struct Contexts {
+    pub own: Vec<usize>,
+    pub memory: Vec<MemoryOp>,
+}
 pub(crate) fn flatten_contexts(
     program: &Program,
 ) -> Result<(Flat, CallEvents, Vec<Allocation>, Contexts)> {
@@ -62,7 +75,7 @@ pub(crate) fn flatten_contexts(
         workspace: Vec::new(),
         nonperm_calls: Vec::new(),
         allocations: Vec::new(),
-        contexts: Vec::new(),
+        contexts: Contexts::default(),
     };
     let mut map: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut interface = Vec::new();
@@ -87,7 +100,7 @@ pub(crate) fn flatten_contexts(
 }
 
 struct Allocator {
-    contexts: Vec<usize>,
+    contexts: Contexts,
     allocations: Vec<Allocation>,
     next: usize,
     workspace: Vec<usize>,
@@ -309,6 +322,34 @@ fn expand(
                 inh.clear();
             }
         }
+        let mem = match node {
+            Node::Load {
+                region, controls, ..
+            }
+            | Node::Unload {
+                region, controls, ..
+            } => Some((region, controls, "load")),
+            Node::Store {
+                region, controls, ..
+            } => Some((region, controls, "store")),
+            Node::ExchM {
+                region, controls, ..
+            } => Some((region, controls, "exch")),
+            _ => None,
+        };
+        if let Some((region, controls, op)) = mem {
+            let (a, w) = circuit
+                .region_geom(region)
+                .ok_or("placement: missing region geometry")?;
+            alloc.contexts.memory.push(MemoryOp {
+                start: begin,
+                end: gates.len(),
+                op: op.into(),
+                a,
+                w,
+                controls: inherited.len() + controls.len(),
+            });
+        }
         if !matches!(node, Node::Call { .. }) {
             let own = match node {
                 Node::Gate(g) => Some(g.own_controls),
@@ -317,7 +358,7 @@ fn expand(
                 _ => None,
             };
             for gate in &gates[begin..] {
-                alloc.contexts.push(own.unwrap_or_else(|| {
+                alloc.contexts.own.push(own.unwrap_or_else(|| {
                     gate.controls.len()
                         - inherited.len()
                         - match node {

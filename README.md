@@ -26,13 +26,14 @@ Oracle export requires a fixed budget. Classical arguments are positional
 `oracle::specialise` and `lower::lower_program_with_args`.
 
 `run-oracle` executes the compiled circuit on basis inputs (`--input`,
-`--budget`, `--arg`, `--mem`); `run-action` supports permutation circuits with
-`--basis` or `--mut`/`--in`/`--mem`, `--arg`, and `--adjoint`. These diagnostic
-CLI commands use exact Boolean basis evolution. Non-permutation CLI execution
-reports an explicit staged error; the independent test simulator supports all
-exported gate families exactly. Pass an explicit small budget for circuit
-execution; the reference-compatible default of one million steps is expensive
-when materialised as a literal circuit.
+`--budget`, `--arg`, `--mem`). `run-action` supports all exported gate
+families on basis input (`--basis` or `--mut`/`--in`/`--mem`), including
+`--arg` and `--adjoint`. Its sparse amplitudes are exact symbolic values;
+JSON displays binary64 values. Action `reverse` composes the circuit with
+its adjoint and checks exact restoration including phase. These are
+execution diagnostics, not numerical/channel certificates. Oracle basis
+execution has a Boolean fast path; explicit small budgets avoid large
+literal circuit materialisation.
 
 M2 construction and specialisation are implemented. The remaining general
 proof obligations have explicit decision beads rather than another milestone
@@ -40,13 +41,26 @@ deferral; see [the disposition note](docs/design/2026-10-30-m2-open-proofs.md).
 pk3/pk3.2 are closed by the requested disposition process, not as a complete
 static-checker claim. Unsupported proofs still fail loudly naming their bead.
 
-M3 has a first placement slice: `placement::place_action(&object, action,
-&args)` returns a flat circuit, logical-to-physical mapping and live intervals.
-It validates cleanliness before reusing clean workspace with disjoint gate
-lifetimes and the same requested class. Interfaces, dirty borrowed wires and
-local-region wires stay dedicated. `any` remains unresolved until target
-assignment. This API rejects supplied schedules naming **b-isa-spec-8r4**;
-full target assignment and schedule consumption remain M3 work.
+M3 placement validates before clean workspace reuse. `placement::place_on_target`
+places a hierarchical action; `placement::place_oracle_on_target` additionally
+takes its fixed budget. Interfaces, dirty source borrows and local regions
+remain dedicated. Concrete classes resolve against target capacities; native
+gates, non-nesting schemes, scheme ancillae and QRAM capability drive exact
+sequential resource accounting. The target's expressions supply every cost.
+
+`check-target <target.json>` validates canonical target bytes and prints its
+hash. `place <object> <region> <target.json> [--budget ...] [--arg ...]`
+prints placement metadata; `place-qasm` with those arguments emits executable
+placed QASM with the source hierarchy/certificate, bindings, specialisation
+request, logical map, timing, resources and obligations attached. This does
+not issue a new §12 certificate. QIR/Quil remain M5. The IR comment format is
+now `bc-ir-2`, which preserves own versus effective controls.
+
+Supplied schedules refuse with **b-isa-spec-8r4** until the bound library is
+published; frame interchange stays **4fa**. Default placement is exact.
+Topology/routing input needs its missing §8 schema (**b4k**); `eps_decade`
+indices need their missing definition (**v44**). Both errors name their bead.
+See the latest PLAN/PROGRESS sections for publication boundaries.
 
 `check` validates schemas, widths, cleanup windows, matched invocation
 multiplicities, translation-lemma borrow frames and the documented incoming

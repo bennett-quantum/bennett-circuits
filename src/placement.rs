@@ -39,7 +39,7 @@ pub struct Placement {
 pub fn place_action(object: &Object, action: &str, args: &[Argument]) -> Result<Placement> {
     if object.schedule.is_some() {
         bail!(
-            "unimplemented: §11 scheduled placement requires the unpublished expansion library b-isa-spec-8r4 (milestone 3)"
+            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 scheduled placement requires the unpublished expansion library b-isa-spec-8r4 (milestone 3)"
         );
     }
     object.check()?;
@@ -50,7 +50,10 @@ pub fn place_action(object: &Object, action: &str, args: &[Argument]) -> Result<
         bail!("placement: @{action} is not an action (§5.3)");
     }
     let program = crate::lower::lower_program_with_args(object, action, args)?;
-    let (mut flat, _, allocations) = flatten_allocations(&program)?;
+    place_validated_program(&program)
+}
+fn place_validated_program(program: &Program) -> Result<Placement> {
+    let (mut flat, _, allocations) = flatten_allocations(program)?;
     let mut uses: Vec<Option<(usize, usize)>> = vec![None; flat.num_qubits];
     for (index, gate) in flat.gates.iter().enumerate() {
         for q in gate
@@ -168,7 +171,9 @@ pub struct Event {
     pub source_gate: usize,
     pub start: Rational,
     pub end: Rational,
-    pub leaf: Leaf,
+    pub leaf: Option<Leaf>,
+    pub qram: Option<crate::flatten::MemoryOp>,
+    pub costs: BTreeMap<String, Rational>,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimedWire {
@@ -185,6 +190,7 @@ pub struct Placed {
     pub flat: Flat,
     pub placement: Placement,
     pub source: Program,
+    pub request: Value,
     pub object_hash: String,
     pub closure_hash: String,
     pub target_hash: String,
@@ -206,10 +212,40 @@ pub fn place_on_target(
     target: &Target,
 ) -> Result<Placed> {
     let placement = place_action(object, action, args)?;
-    let report = object.hash()?;
     let source = crate::lower::lower_program_with_args(object, action, args)?;
+    let mut placed = place_target_program(object, action, target, source, placement)?;
+    placed.request = request(action, args, None);
+    Ok(placed)
+}
+pub fn place_oracle_on_target(
+    object: &Object,
+    name: &str,
+    budget: crate::oracle::Budget,
+    args: &[Argument],
+    target: &Target,
+) -> Result<Placed> {
+    if object.schedule.is_some() {
+        bail!(
+            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 expansion library b-isa-spec-8r4 (milestone 3)"
+        );
+    }
+    object.check()?;
+    let source = crate::oracle::specialise(object, name, budget, args)?;
+    let placement = place_validated_program(&source)?;
+    let mut placed = place_target_program(object, name, target, source, placement)?;
+    placed.request = request(name, args, Some(budget));
+    Ok(placed)
+}
+fn place_target_program(
+    object: &Object,
+    action: &str,
+    target: &Target,
+    source: Program,
+    placement: Placement,
+) -> Result<Placed> {
+    let report = object.hash()?;
     let (_, _, _, contexts) = crate::flatten::flatten_contexts(&source)?;
-    if contexts.len() != placement.flat.gates.len() {
+    if contexts.own.len() != placement.flat.gates.len() {
         bail!("placement: gate context trace length mismatch");
     }
     let ptr = object.header.ptr_width;
@@ -244,6 +280,10 @@ pub fn place_on_target(
             if requests[q] != "any" && &requests[q] != name {
                 continue;
             }
+            if target.classes[name].capacity.is_none() {
+                chosen = Some(name.clone());
+                break;
+            }
             let mut spans = assigned.get(name).cloned().unwrap_or_default();
             spans.extend(intervals[q].iter().map(|(s, e, _)| (*s, *e)));
             let peak = peak_indices(&spans);
@@ -263,17 +303,67 @@ pub fn place_on_target(
     if crate::target::field(caps, "max_parallel")?.as_u64() == Some(0) && n != 0 {
         bail!("§8.2 max_parallel=0 forbids gates");
     }
+    let mut execution_peaks = assigned
+        .iter()
+        .map(|(c, spans)| (c.clone(), peak_indices(spans)))
+        .collect::<BTreeMap<_, _>>();
     let mut flat = placement.flat.clone();
     flat.gates.clear();
     let mut events = Vec::new();
     let mut clock = Rational::ZERO;
-    let mut boundaries = vec![clock];
+    let mut gate_starts = vec![clock; n];
+    let mut gate_ends = vec![clock; n];
     let mut wires = Vec::new();
-    for (i, g) in placement.flat.gates.iter().enumerate() {
+    let mut i = 0;
+    while i < n {
+        let g = &placement.flat.gates[i];
+        let qram = if !crate::target::field(&target.document, "qram")?.is_null() {
+            contexts.memory.iter().find(|m| m.start == i)
+        } else {
+            None
+        };
+        if let Some(m) = qram {
+            let ctx = BTreeMap::from([
+                ("a".into(), Rational::integer(i128::from(m.a))),
+                ("w".into(), Rational::integer(i128::from(m.w))),
+                ("c".into(), Rational::integer(m.controls as i128)),
+            ]);
+            let spec =
+                crate::target::field(crate::target::field(&target.document, "qram")?, &m.op)?;
+            let mut costs = BTreeMap::new();
+            for (name, e) in crate::target::field(spec, "cost")?
+                .as_object()
+                .ok_or("§8.3 QRAM cost map")?
+            {
+                let cost = crate::target::evaluate(e, &ctx, &target.tables)?;
+                if cost.numerator < 0 {
+                    bail!("§8.1 costs MUST be nonnegative and finite");
+                }
+                costs.insert(name.clone(), cost);
+            }
+            let end = clock.checked_add(*costs.get("time").ok_or("§8.2 QRAM lacks time cost")?)?;
+            for j in i..m.end {
+                gate_starts[j] = clock;
+                gate_ends[j] = end;
+            }
+            flat.gates
+                .extend_from_slice(&placement.flat.gates[i..m.end]);
+            events.push(Event {
+                source_gate: i,
+                start: clock,
+                end,
+                leaf: None,
+                qram: Some(m.clone()),
+                costs,
+            });
+            clock = end;
+            i = m.end;
+            continue;
+        }
         let depth = g
             .controls
             .len()
-            .checked_sub(contexts[i])
+            .checked_sub(contexts.own[i])
             .ok_or("placement: own controls exceed total")?;
         if crate::target::field(caps, "max_predicate_depth")?
             .as_u64()
@@ -281,19 +371,49 @@ pub fn place_on_target(
         {
             bail!("§8.3 max_predicate_depth exceeded");
         }
-        // Reuse the scheme's clean/dirty pool across disjoint operation frames.
-        let old = classes.len();
-        let expanded = target.expand(g, contexts[i], &mut classes, Rational::ZERO)?;
+        let expanded = target.expand(g, contexts.own[i], &mut classes, Rational::ZERO)?;
+        if !expanded.ancillae.is_empty() {
+            for (name, class) in &target.classes {
+                let base_live = intervals
+                    .iter()
+                    .enumerate()
+                    .filter(|(q, spans)| {
+                        classes[*q] == *name
+                            && spans.iter().any(|(start, end, _)| *start <= i && i < *end)
+                    })
+                    .count();
+                let ancilla_live = expanded
+                    .ancillae
+                    .iter()
+                    .filter(|(_, c, _)| c == name)
+                    .count();
+                let peak = execution_peaks.entry(name.clone()).or_default();
+                *peak = (*peak).max(base_live + ancilla_live);
+                if class
+                    .capacity
+                    .is_some_and(|cap| base_live + ancilla_live > cap)
+                {
+                    bail!(
+                        "§8.4 capacity constraint is peak live qubits per class: {name} needs {}",
+                        base_live + ancilla_live
+                    );
+                }
+            }
+        }
         let start = clock;
+        gate_starts[i] = clock;
         for leaf in expanded.leaves {
             let duration = *leaf.costs.get("time").ok_or("§8.2 gate lacks time cost")?;
-            let end = clock.add(duration)?;
+            let end = clock.checked_add(duration)?;
             flat.gates.push(leaf.gate.clone());
+            let costs = leaf.costs.clone();
             events.push(Event {
                 source_gate: i,
                 start: clock,
                 end,
-                leaf,
+                leaf: Some(leaf),
+                qram: None,
+                costs,
             });
             clock = end;
         }
@@ -306,12 +426,8 @@ pub fn place_on_target(
                 dirty,
             });
         }
-        // Each scheme instance owns a separate index; subsequent packing is
-        // explicit below, while the preserved source/obligation binding stays.
-        if classes.len() < old {
-            bail!("placement: scheme shrank wire table");
-        }
-        boundaries.push(clock);
+        gate_ends[i] = clock;
+        i += 1;
     }
     // Pack scheme ancillae of the same class/cleanliness across nonoverlapping
     // time intervals. Borrowed source wires are never taken as scratch.
@@ -344,15 +460,16 @@ pub fn place_on_target(
         }
     }
     for e in &mut events {
-        for q in e
-            .leaf
-            .gate
-            .targets
-            .iter_mut()
-            .chain(e.leaf.gate.controls.iter_mut().map(|(q, _)| q))
-        {
-            if let Some(p) = remap.get(q) {
-                *q = *p;
+        if let Some(leaf) = &mut e.leaf {
+            for q in leaf
+                .gate
+                .targets
+                .iter_mut()
+                .chain(leaf.gate.controls.iter_mut().map(|(q, _)| q))
+            {
+                if let Some(p) = remap.get(q) {
+                    *q = *p;
+                }
             }
         }
     }
@@ -365,17 +482,36 @@ pub fn place_on_target(
             wires.push(TimedWire {
                 wire: q,
                 class: classes[q].clone(),
-                start: boundaries[s.min(n)],
-                end: boundaries[e.min(n)],
+                start: if s < n { gate_starts[s] } else { clock },
+                end: if e > 0 && n > 0 {
+                    gate_ends[e.min(n) - 1]
+                } else {
+                    clock
+                },
                 dirty,
             });
         }
     }
-    let (resources, per_class) = aggregate(target, &events, &wires)?;
+    let (resources, mut per_class) = aggregate(target, &events, &wires)?;
+    for (name, resource) in &target.resources {
+        if crate::target::field(resource, "kind")?.as_str() == Some("peak") {
+            let per = per_class
+                .get_mut(name)
+                .ok_or("placement: missing peak resource")?;
+            for (class, peak) in &execution_peaks {
+                let value = per.entry(class.clone()).or_insert(Rational::ZERO);
+                if value.compare(Rational::integer(*peak as i128))?.is_lt() {
+                    *value = Rational::integer(*peak as i128);
+                }
+            }
+        }
+    }
+
     Ok(Placed {
         flat,
         placement,
         source,
+        request: Value::Null,
         object_hash: report.object_hash,
         closure_hash: report.symbols[action]
             .closure_hash
@@ -404,21 +540,18 @@ fn peak_indices(spans: &[(usize, usize)]) -> usize {
     }
     peak as usize
 }
-fn aggregate(
-    target: &Target,
-    events: &[Event],
-    wires: &[TimedWire],
-) -> Result<(
+type ResourceTotals = (
     BTreeMap<String, Rational>,
     BTreeMap<String, BTreeMap<String, Rational>>,
-)> {
+);
+fn aggregate(target: &Target, events: &[Event], wires: &[TimedWire]) -> Result<ResourceTotals> {
     let mut values = BTreeMap::new();
     let mut by_class = BTreeMap::new();
     for (name, r) in &target.resources {
         let kind = crate::target::string(crate::target::field(r, "kind")?)?;
         if kind == "count" {
             let value = events.iter().try_fold(Rational::ZERO, |sum, e| {
-                sum.add(e.leaf.costs.get(name).copied().unwrap_or(Rational::ZERO))
+                sum.checked_add(e.costs.get(name).copied().unwrap_or(Rational::ZERO))
             })?;
             values.insert(name.clone(), value);
         } else if kind == "time" {
@@ -433,13 +566,31 @@ fn aggregate(
                     .iter()
                     .filter(|w| &w.class == class)
                     .collect::<Vec<_>>();
-                let mut peak = 0;
+                let mut points = Vec::new();
                 for w in &ws {
-                    let mut live = BTreeSet::new();
-                    for v in &ws {
-                        if !v.start.compare(w.start)?.is_gt() && v.end.compare(w.start)?.is_gt() {
-                            live.insert(v.wire);
-                        }
+                    if w.start.compare(w.end)?.is_lt() {
+                        points.push((w.start, 1i64, w.wire));
+                        points.push((w.end, -1i64, w.wire));
+                    }
+                }
+                let mut failure = None;
+                points.sort_by(|a, b| match a.0.compare(b.0) {
+                    Ok(o) => o.then(a.1.cmp(&b.1)),
+                    Err(e) => {
+                        failure = Some(e);
+                        std::cmp::Ordering::Equal
+                    }
+                });
+                if let Some(e) = failure {
+                    return Err(e);
+                }
+                let mut live = BTreeMap::<usize, i64>::new();
+                let mut peak = 0;
+                for (_, delta, q) in points {
+                    let count = live.entry(q).or_default();
+                    *count += delta;
+                    if *count == 0 {
+                        live.remove(&q);
                     }
                     peak = peak.max(live.len());
                 }
@@ -461,11 +612,11 @@ fn aggregate(
                         .transpose()?
                         .unwrap_or(Rational::ONE);
                     ws.iter().try_fold(Rational::ZERO, |v, w| {
-                        v.add(w.end.add(w.start.negated()?)?.mul(if w.dirty {
-                            c.dirty_rate
-                        } else {
-                            rate
-                        })?)
+                        v.checked_add(
+                            w.end
+                                .checked_add(w.start.negated()?)?
+                                .checked_mul(if w.dirty { c.dirty_rate } else { rate })?,
+                        )
                     })?
                 };
                 per.insert(class.clone(), value);
@@ -505,6 +656,8 @@ impl Placed {
             ("closure_hash".into(), s(&self.closure_hash)),
             ("target_hash".into(), s(&self.target_hash)),
             ("source_ir".into(), crate::ir_codec::encode(&self.source)),
+            ("request".into(),self.request.clone()),
+            ("obligations".into(),Value::Array(["§5.2/§5.3 full-domain interface equivalence; source proof obligations retained", "§5.6 borrowed-system identity, including external entanglement", "§8.3 scheme correctness is the target author's obligation", "§9.4/§12 frame certificate schema publication: bennett-circuits-4fa", "§12 new certificate generation remains milestone 4"].iter().map(|s|Value::Str((*s).into())).collect())),
             (
                 "source_certificate".into(),
                 self.certificate.clone().unwrap_or(Value::Null),
@@ -539,10 +692,19 @@ impl Placed {
                                 ("source_gate".into(), Value::Int(e.source_gate.to_string())),
                                 ("start".into(), s(e.start.decimal()?)),
                                 ("end".into(), s(e.end.decimal()?)),
-                                ("op".into(), s(&e.leaf.op)),
+                                (
+                                    "op".into(),
+                                    s(e.leaf.as_ref().map_or_else(
+                                        || e.qram.as_ref().expect("event kind").op.as_str(),
+                                        |l| l.op.as_str(),
+                                    )),
+                                ),
                                 (
                                     "scheme".into(),
-                                    e.leaf.scheme.as_ref().map_or(Value::Null, s),
+                                    e.leaf
+                                        .as_ref()
+                                        .and_then(|l| l.scheme.as_ref())
+                                        .map_or(Value::Null, s),
                                 ),
                             ])))
                         })
@@ -568,4 +730,40 @@ impl Placed {
             ),
         ])))
     }
+}
+
+fn request(name: &str, args: &[Argument], budget: Option<crate::oracle::Budget>) -> Value {
+    fn budget_value(b: crate::oracle::Budget) -> Value {
+        Value::Array(
+            [b.steps, b.heap, b.stack, b.depth]
+                .iter()
+                .map(|n| Value::Str(n.to_string()))
+                .collect(),
+        )
+    }
+    Value::Object(BTreeMap::from([
+        ("region".into(), Value::Str(name.into())),
+        ("epsilon".into(), Value::Str("0".into())),
+        ("budget".into(), budget.map_or(Value::Null, budget_value)),
+        (
+            "params".into(),
+            Value::Array(
+                args.iter()
+                    .map(|a| {
+                        Value::Object(match a {
+                            Argument::Integer(n) => {
+                                BTreeMap::from([("integer".into(), Value::Str(n.clone()))])
+                            }
+                            Argument::Float(n) => {
+                                BTreeMap::from([("f64".into(), Value::Str(n.to_string()))])
+                            }
+                            Argument::Token(b) => {
+                                BTreeMap::from([("token".into(), budget_value(*b))])
+                            }
+                        })
+                    })
+                    .collect(),
+            ),
+        ),
+    ]))
 }

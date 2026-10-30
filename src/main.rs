@@ -387,7 +387,9 @@ fn run_basis(args: &[String]) -> Result<()> {
             }
             for m in &c.mem {
                 if let Some(data) = options.memory.get(&m.name) {
-                    if data.len() != m.width() as usize {
+                    if data.len()
+                        != m.num_cells() as usize * (m.cell_width as usize).div_ceil(8) * 8
+                    {
                         return Err(Error("run-action: memory width mismatch".into()));
                     }
                     bits.extend(data);
@@ -418,6 +420,11 @@ fn run_basis(args: &[String]) -> Result<()> {
             .map(|b| if *b { '1' } else { '0' })
             .collect::<String>();
         let state = bennett_circuits::simulation::basis(&executed, &bits);
+        let forward_state = if reversing {
+            Some(bennett_circuits::simulation::basis(&flat, &bits))
+        } else {
+            None
+        };
         let definite = |start: usize, width: usize| -> Value {
             let values = state
                 .keys()
@@ -485,6 +492,24 @@ fn run_basis(args: &[String]) -> Result<()> {
                 ("adjoint".into(), Value::Bool(options.adjoint)),
                 ("wires".into(), Value::Int(input.len().to_string())),
                 ("state".into(), state),
+                (
+                    "forward_state".into(),
+                    forward_state.map_or(Value::Null, |state| Value::Object(
+                        state
+                            .into_iter()
+                            .map(|(k, a)| {
+                                let (re, im) = a.value();
+                                (
+                                    k,
+                                    Value::Array(vec![
+                                        Value::Int(re.to_string()),
+                                        Value::Int(im.to_string()),
+                                    ]),
+                                )
+                            })
+                            .collect()
+                    ))
+                ),
                 ("mut".into(), Value::Array(muts)),
                 ("in".into(), Value::Array(ins)),
                 ("mem".into(), Value::Object(memory)),
@@ -508,6 +533,9 @@ fn oracle_diagnostic(args: &[String], o: &Object, name: &str) -> Result<()> {
     while let Some(option) = options.next() {
         match option.as_str() {
             "--suite" => {}
+            "--exhaustive" | "--max-bits" => {
+                return Err(Error("unimplemented: §14.1 fixed-region/general-domain direct step-check options (milestone 6)".into()));
+            }
             "--steps" => {
                 if steps.is_some() {
                     return Err(Error("reverse: repeated --steps".into()));
@@ -643,6 +671,22 @@ fn oracle_diagnostic(args: &[String], o: &Object, name: &str) -> Result<()> {
 }
 
 fn run(args: &[String]) -> Result<()> {
+    if args.len() >= 2
+        && matches!(
+            args[0].as_str(),
+            "run-program"
+                | "run-cc"
+                | "run-action"
+                | "run-oracle"
+                | "reverse"
+                | "step-check"
+                | "export-qasm"
+        )
+        && load(&args[1])?.schedule.is_some()
+    {
+        return Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: §11 A consumer that does not implement the bound library rejects the schedule; unimplemented: unpublished expansion library b-isa-spec-8r4 (milestone 3)".into()));
+    }
+
     if matches!(args.first().map(String::as_str), Some("run-cc" | "reverse")) && args.len() >= 3 {
         let o = load(&args[1])?;
         o.check()?;
@@ -678,14 +722,16 @@ fn run(args: &[String]) -> Result<()> {
     }
     match args.first().map(String::as_str) {
         Some("run-oracle"|"run-action") if args.len()>=3 => run_basis(args),
-        Some("run-program") if args.len()>=3 => {let o=load(&args[1])?;o.check()?;println!("{}",bennett_circuits::classical::launch(&o,args[2].trim_start_matches('@'),&args[3..])?.to_jcs());Ok(())},
+        Some("run-program") if args.len()>=3 => {let o=load(&args[1])?;o.check()?;if args[3..].iter().any(|a|a=="--schedule"){return Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: unimplemented: §11 bound expansion library b-isa-spec-8r4 (milestone 3)".into()));}
+            if let Some(pos)=args.iter().position(|a|a=="--target"){let path=args.get(pos+1).ok_or_else(||bennett_circuits::Error("target path required".into()))?;let text=std::fs::read_to_string(path).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;bennett_circuits::target::Target::parse(&text)?;return Err(bennett_circuits::Error("unimplemented: §10 target-aware classical launch (milestone 6); use place/place-qasm for coherent regions".into()));}println!("{}",bennett_circuits::classical::launch(&o,args[2].trim_start_matches('@'),&args[3..])?.to_jcs());Ok(())},
         Some("check-target") if args.len()==2 => {let text=std::fs::read_to_string(&args[1]).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;let t=bennett_circuits::target::Target::parse(&text)?;println!("{}",Value::Object(BTreeMap::from([("target_hash".into(),Value::Str(t.hash))])).to_jcs());Ok(())},
         Some("place-qasm"|"place") if args.len()>=4 => {
             let o=load(&args[1])?;let text=std::fs::read_to_string(&args[3]).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;
             let t=bennett_circuits::target::Target::parse(&text)?;
             let opts=basis_options(&o,&args[4..])?;
-            if opts.budget.is_some() || opts.input.is_some() || opts.muts.is_some() || opts.ins.is_some() || opts.basis.is_some() || !opts.memory.is_empty() || opts.adjoint {return Err(bennett_circuits::Error("unimplemented: placement input option (milestone 3)".into()));}
-            let p=bennett_circuits::placement::place_on_target(&o,args[2].trim_start_matches('@'),&opts.args,&t)?;
+            if opts.input.is_some() || opts.muts.is_some() || opts.ins.is_some() || opts.basis.is_some() || !opts.memory.is_empty() || opts.adjoint {return Err(bennett_circuits::Error("unimplemented: placement input option (milestone 3)".into()));}
+            let name=args[2].trim_start_matches('@');
+            let p=if o.function(name).is_some_and(|f|f.kind==bennett_circuits::object::FnKind::Oracle){let budget=opts.budget.ok_or_else(||bennett_circuits::Error("oracle placement requires --budget (§5.4)".into()))?;bennett_circuits::placement::place_oracle_on_target(&o,name,budget,&opts.args,&t)?}else{if opts.budget.is_some(){return Err(bennett_circuits::Error("action budget supplied via --arg token (§5.4)".into()));}bennett_circuits::placement::place_on_target(&o,name,&opts.args,&t)?};
             if args[0]=="place-qasm" {print!("{}",bennett_circuits::qasm::export_placed(&p)?);}else{println!("{}",p.annotations()?.to_jcs());}Ok(())
         },
         Some("schedule") => Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: §11 A consumer that does not implement the bound library rejects the schedule; unimplemented: unpublished expansion library b-isa-spec-8r4 (milestone 3)".into())),
@@ -713,6 +759,7 @@ fn run(args: &[String]) -> Result<()> {
             print!("{}", bennett_circuits::qasm::export(&p)?);
             Ok(())
         }
+        Some("export-qir"|"export-quil") => Err(bennett_circuits::Error(format!("unimplemented: {} exporter (milestone 5)",args[0]))),
         Some("hash") if args.len() == 2 => {
             let report = load(&args[1])?.hash()?;
             println!("{}", report_json(&report).to_jcs());

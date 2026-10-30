@@ -262,3 +262,38 @@ export integration. Supplied schedules fail explicitly naming
 **b-isa-spec-8r4**, because the unpublished generated-operation contract must
 not be guessed or silently ignored. M3 owner: `bennett-circuits-1ud`; first
 slice: `bennett-circuits-pk3.4` (parented under M3).
+
+## Milestone 3 implementation and publication boundaries (2026-10-30)
+
+The available 0.8 slice now includes validated clean interval reuse; target
+JCS/hash and exact rational expressions; own/effective control provenance;
+concrete class assignment and peak capacity; first native/first non-nesting
+scheme matching and epsilon matching; clean/dirty scheme ancilla frames;
+native QRAM cost events or logical dispatch when `qram` is null; sequential
+leaf timing and every declared resource (count/time, per-class peak/occupancy,
+dirty-rate replacement). Actions and bounded oracle specialisations both
+have target placement APIs. A placed executable keeps the source hierarchy,
+source certificate, object/closure/target bindings, actual budget/parameters,
+logical mapping and proof obligations attached in versioned QASM comments.
+This is proof-obligation transport; new ISA §12 certificates remain M4.
+`bc-ir-2` additionally records own opcode control counts; old metadata is
+version-rejected rather than guessed.
+
+The five M2 dispositions remain untouched. 1ud cannot be called wholly closed
+while the following publication dependencies remain: §11 generated-operation
+identities and bound schedule execution require **b-isa-spec-8r4**; frame/idle
+pool interchange needs **bennett-circuits-4fa**. Actual supplied schedules
+refuse with E_SCHEDULE_INFEASIBLE, §11, the upstream bead, and milestone 3.
+No private IDs are exported as generated ordinals; no C scheduler ABI or
+reference library is fabricated from the published declaration-only header.
+Default circuit placement requests exact accuracy; explicit nonzero scheduled
+realisations await the library and the M4 numerical/channel claims. Target
+entry accuracy matching itself is implemented/tested with exact rationals.
+
+Two additional literal contract gaps are tracked, not removed from scope:
+**b4k** (`isa-0.9`) asks for the topology/connectivity/routing schema absent
+from §8.3 despite §8.2's topology sentence; **v44** (`isa-0.9`) asks for the
+undefined `eps_decade` integer index function. Both paths refuse naming their
+bead. The accepted default remains all-to-all logical connectivity. QIR/Quil
+stay M5 with explicit exporter refusals; wider/direct-machine diagnostic
+acceptance is M6 (`fgx`), not evidence that the circuit placement is unequal.

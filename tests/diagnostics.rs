@@ -17,6 +17,10 @@ fn suite_a_execution_and_reversal() {
     acceptance("A", |_| true);
 }
 #[test]
+fn suite_h_expansion_refusal() {
+    acceptance("H", |c| c.get("command").is_some());
+}
+#[test]
 fn suite_d_exact_actions() {
     acceptance("D", |c| {
         c.get("command").is_some() && c.get("unavailable").is_none()

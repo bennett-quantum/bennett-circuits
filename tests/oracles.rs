@@ -2,6 +2,8 @@
 mod exact;
 #[path = "support/sim.rs"]
 mod sim;
+#[path = "support/target.rs"]
+mod target;
 use bennett_circuits::{
     flatten::flatten,
     object::Object,
@@ -125,6 +127,15 @@ fn every_oracle_matches_cli_on_basis_tuples() {
             let p = specialise(&o, &fun.name, budget, &args)
                 .unwrap_or_else(|e| panic!("{} @{}: {e}", path.display(), fun.name));
             let flat = flatten(&p).unwrap();
+            drop(p);
+            let placed = bennett_circuits::placement::place_oracle_on_target(
+                &o,
+                &fun.name,
+                budget,
+                &args,
+                &target::universal(false, false),
+            )
+            .unwrap();
             let w = flat.interface.len();
             eprintln!(
                 "CIRCUIT {} @{}: {} wires {} gates",
@@ -270,6 +281,13 @@ fn every_oracle_matches_cli_on_basis_tuples() {
                 let input = String::from_utf8(bits).unwrap();
                 let expected = String::from_utf8(expected).unwrap();
                 let ours = sim::basis(&flat, &input);
+                assert_eq!(
+                    sim::basis(&placed.flat, &input),
+                    ours,
+                    "ORACLE PLACEMENT {} @{} {input}",
+                    path.display(),
+                    fun.name
+                );
                 assert_eq!(ours.len(), 1, "{} @{} {input}", path.display(), fun.name);
                 assert_eq!(
                     ours.get(&expected),

@@ -4,6 +4,8 @@
 mod exact;
 #[path = "support/sim.rs"]
 mod sim;
+#[path = "support/target.rs"]
+mod target;
 use bennett_circuits::{lower::lower_program, object::Object, qasm};
 use std::{
     collections::BTreeMap,
@@ -99,6 +101,22 @@ fn every_action_every_basis_matches_run_action() {
             assert_eq!(qasm::parse(&text).unwrap(), program);
             let flat = qasm::parse_flat(&text).unwrap();
             let placed = bennett_circuits::placement::place_action(&obj, &f.name, &[]).unwrap();
+            let targets = [
+                target::universal(false, false),
+                target::universal(false, true),
+                target::universal(true, false),
+            ];
+            let targeted = targets
+                .iter()
+                .map(|t| {
+                    let p = bennett_circuits::placement::place_on_target(&obj, &f.name, &[], t)
+                        .unwrap();
+                    let q = qasm::export_placed(&p).unwrap();
+                    let parsed = qasm::parse_flat(&q).unwrap();
+                    assert_eq!(p.flat, parsed);
+                    p
+                })
+                .collect::<Vec<_>>();
             let width = flat.interface.len();
             assert!(
                 width < usize::BITS as usize,
@@ -142,6 +160,15 @@ fn every_action_every_basis_matches_run_action() {
                     path.display(),
                     f.name
                 );
+                for (pass, p) in targeted.iter().enumerate() {
+                    assert_eq!(
+                        sim::basis(&p.flat, &bits),
+                        ours,
+                        "TARGET PASS {pass} {} @{} input={bits}",
+                        path.display(),
+                        f.name
+                    );
+                }
                 let display = ours
                     .iter()
                     .map(|(b, a)| (b.clone(), a.value()))
@@ -175,7 +202,7 @@ fn every_action_every_basis_matches_run_action() {
     }
     assert!(actions >= 19, "expected fixture plus supplemental actions");
     eprintln!(
-        "HARNESS: {actions} actions, {cases} basis comparisons, {cases} agree, 0 diverge; phase-sensitive display tolerance 2e-12; exact support/workspace checks; placed circuits agree on all {cases} tuples"
+        "HARNESS: {actions} actions, {cases} basis comparisons, {cases} agree, 0 diverge; phase-sensitive display tolerance 2e-12; exact support/workspace checks; reuse, native, scheme and QRAM placement passes each agree on all {cases} tuples"
     );
 }
 

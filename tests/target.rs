@@ -3,6 +3,8 @@
 mod exact;
 #[path = "support/sim.rs"]
 mod sim;
+#[path="support/target.rs"]
+mod targets;
 use bennett_circuits::{
     object::Object,
     placement::place_on_target,
@@ -158,7 +160,10 @@ fn scheme_expansion_is_exact_accounts_leaves_and_reuses_ancilla_frames() {
         assert_eq!(z[bits].value(), (1., 0.));
     }
     assert_eq!(
-        p.events.iter().filter(|e| e.leaf.scheme.is_some()).count(),
+        p.events
+            .iter()
+            .filter(|e| e.leaf.as_ref().is_some_and(|l| l.scheme.is_some()))
+            .count(),
         6
     );
     let mut low = scheme_target();
@@ -197,7 +202,7 @@ fn exact_expressions_binding_epsilon_and_first_entry() {
     assert_eq!(
         Rational::parse("1e-3")
             .unwrap()
-            .mul(Rational::integer(1000))
+            .checked_mul(Rational::integer(1000))
             .unwrap(),
         Rational::ONE
     );
@@ -326,4 +331,164 @@ fn topology_schedule_and_missing_native_leaf_fail_loudly() {
             .0
             .contains("b-isa-spec-8r4")
     );
+}
+
+#[test]
+fn native_qram_uses_target_costs_once_and_preserves_exact_memory_semantics() {
+    let mut t = base_target();
+    put(
+        &mut t,
+        "qram",
+        val(
+            r#"{"load":{"cost":{"time":{"var":"w"},"gates":10}},"store":{"cost":{"time":{"var":"w"},"gates":20}},"exch":{"cost":{"time":{"var":"w"},"gates":30}}}"#,
+        ),
+    );
+    // A native QRAM load must not demand CX/MCX native gate entries for its
+    // semantic simulator expansion or double-charge those dispatch gates.
+    put(&mut t, "gates", val("[]"));
+    let o = make_object(
+        "perm_action @a (t:wire mut) (a:wire in) (m:region[1,1] mut) () ()\n^entry():\nqstore m a t\nqexchm m a t\n",
+    );
+    let p = place_on_target(&o, "a", &[], &Target::parse(&t.to_jcs()).unwrap()).unwrap();
+    assert_eq!(p.events.len(), 2);
+    assert_eq!(p.resources["time"], Rational::integer(2));
+    assert_eq!(p.resources["gates"], Rational::integer(50));
+    let old = bennett_circuits::flatten::flatten(
+        &bennett_circuits::lower::lower_program(&o, "a").unwrap(),
+    )
+    .unwrap();
+    for x in 0..16 {
+        let b = (0..4)
+            .map(|i| if x >> i & 1 == 0 { '0' } else { '1' })
+            .collect::<String>();
+        assert_eq!(sim::basis(&old, &b), sim::basis(&p.flat, &b));
+    }
+}
+
+#[test]
+fn computed_zero_epsilon_cannot_use_accuracy_in_costs_and_unknown_decades_refuse() {
+    use std::collections::BTreeMap;
+    let mut t = base_target();
+    let mut entries = t.get("gates").unwrap().as_array().unwrap().to_vec();
+    put(
+        &mut entries[0],
+        "epsilon",
+        val(r#"{"op":"-","args":[{"var":"k"},{"var":"k"}]}"#),
+    );
+    put(&mut entries[0], "cost", val(r#"{"time":{"var":"eps"}}"#));
+    put(
+        &mut t,
+        "gates",
+        bennett_circuits::json::Value::Array(entries),
+    );
+    let t = Target::parse(&t.to_jcs()).unwrap();
+    let gate = bennett_circuits::flatten::FlatGate {
+        gate: bennett_circuits::ir::BaseGate::X,
+        targets: vec![0],
+        controls: vec![],
+    };
+    assert!(
+        t.native(
+            "x",
+            &gate,
+            0,
+            &["fast".into()],
+            Rational::parse("0.1").unwrap()
+        )
+        .unwrap_err()
+        .0
+        .contains("§8.1")
+    );
+    let e = bennett_circuits::target::evaluate(
+        &val(r#"{"table":"t","index":"eps_decade"}"#),
+        &BTreeMap::from([("eps".into(), Rational::parse("0.1").unwrap())]),
+        &BTreeMap::from([("t".into(), val("[0,1,2]"))]),
+    )
+    .unwrap_err();
+    assert!(e.0.contains("bennett-circuits-v44"));
+}
+
+#[test]
+fn dirty_scheme_restores_every_dirty_input_and_uses_dirty_rate() {
+    let mut t = scheme_target();
+    put(
+        &mut t,
+        "schemes",
+        val(
+            r#"[{"name":"dirty_cx","realises":{"op":"x","controls":{"min":1,"max":1}},"ancillae":{"count":1,"class":"fast","state":"dirty"},"template":[{"gate":"cx","wires":["c[0]","a[0]"]},{"gate":"cx","wires":["a[0]","t"]},{"gate":"cx","wires":["c[0]","a[0]"]},{"gate":"cx","wires":["a[0]","t"]}]}]"#,
+        ),
+    );
+    let o = make_object(
+        "perm_action @sub (t:wire mut) () () () ()\n^entry():\nx t\nperm_action @a (t:wire mut) (p:wire in) () () ()\n^entry():\nctl p action_call @sub (t) () () ()\n",
+    );
+    let p = place_on_target(&o, "a", &[], &Target::parse(&t.to_jcs()).unwrap()).unwrap();
+    assert_eq!(p.per_class["qubit_second"]["fast"], Rational::integer(9));
+    let mut actual = p.flat;
+    actual.interface.push(2);
+    actual.workspace.clear();
+    let mut reference = bennett_circuits::flatten::flatten(
+        &bennett_circuits::lower::lower_program(&o, "a").unwrap(),
+    )
+    .unwrap();
+    reference.num_qubits = 3;
+    reference.interface.push(2);
+    for x in 0..8 {
+        let b = (0..3)
+            .map(|i| if x >> i & 1 == 0 { '0' } else { '1' })
+            .collect::<String>();
+        assert_eq!(sim::basis(&reference, &b), sim::basis(&actual, &b));
+    }
+}
+#[test]
+fn zero_time_does_not_erase_scheme_capacity_requirement() {
+    let mut t = scheme_target();
+    put(
+        &mut t,
+        "classes",
+        val(r#"{"fast":{"capacity":2,"dirty_rate":1,"qubit_second":1}}"#),
+    );
+    let mut gs = t.get("gates").unwrap().as_array().unwrap().to_vec();
+    for g in &mut gs {
+        put(g, "cost", val(r#"{"time":0,"gates":1}"#));
+    }
+    put(&mut t, "gates", bennett_circuits::json::Value::Array(gs));
+    let o = make_object(
+        "perm_action @sub (t:wire mut) () () () ()\n^entry():\nx t\nperm_action @a (t:wire mut) (p:wire in) () () ()\n^entry():\nctl p action_call @sub (t) () () ()\n",
+    );
+    assert!(
+        place_on_target(&o, "a", &[], &Target::parse(&t.to_jcs()).unwrap())
+            .unwrap_err()
+            .0
+            .contains("§8.4")
+    );
+}
+
+#[test]
+fn oracle_placement_annotations_bind_budget_and_exact_target_hash() {
+    let file = std::fs::read_to_string(format!("{ROOT}/E-jcs-target-hash/target.json")).unwrap();
+    assert_eq!(
+        Target::parse(&file).unwrap().hash,
+        "71e1973c642abe3ea4ae5b4c7211fd4e2b2b7817894ca958d138c992cc321596"
+    );
+    let o=Object::parse(&std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa").unwrap()).unwrap();
+    let budget = bennett_circuits::oracle::Budget {
+        steps: 0,
+        heap: 0,
+        stack: 0,
+        depth: 0,
+    };
+    let p = bennett_circuits::placement::place_oracle_on_target(
+        &o,
+        "inc8",
+        budget,
+        &[],
+        &targets::universal(false,false),
+    )
+    .unwrap();
+    let a = p.annotations().unwrap();
+    assert_eq!(
+        a.get("request").unwrap().get("budget"),
+        Some(&val(r#"["0","0","0","0"]"#))
+    );
+    assert!(a.get("obligations").unwrap().as_array().unwrap().len() >= 4);
 }

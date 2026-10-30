@@ -69,7 +69,7 @@ impl Rational {
             )
         }
     }
-    pub fn add(self, b: Self) -> Result<Self> {
+    pub fn checked_add(self, b: Self) -> Result<Self> {
         Self::new(
             self.numerator
                 .checked_mul(b.denominator)
@@ -92,7 +92,7 @@ impl Rational {
             self.denominator,
         )
     }
-    pub fn mul(self, b: Self) -> Result<Self> {
+    pub fn checked_mul(self, b: Self) -> Result<Self> {
         Self::new(
             self.numerator
                 .checked_mul(b.numerator)
@@ -102,8 +102,8 @@ impl Rational {
                 .ok_or("host limit: rational denominator")?,
         )
     }
-    pub fn div(self, b: Self) -> Result<Self> {
-        self.mul(Self::new(b.denominator, b.numerator)?)
+    pub fn checked_div(self, b: Self) -> Result<Self> {
+        self.checked_mul(Self::new(b.denominator, b.numerator)?)
     }
     pub fn compare(self, b: Self) -> Result<std::cmp::Ordering> {
         Ok(self
@@ -259,16 +259,7 @@ pub fn evaluate(
         let i = if index == "k" {
             *vars.get("k").ok_or("§8.1 unbound k")?
         } else {
-            let mut e = *vars.get("eps").ok_or("§8.1 unbound eps")?;
-            if e.numerator <= 0 || e.compare(Rational::ONE)?.is_gt() {
-                bail!("§8.1 eps outside (0,1]");
-            }
-            let mut i = 0;
-            while e.compare(Rational::ONE)?.is_lt() {
-                e = e.mul(Rational::integer(10))?;
-                i += 1;
-            }
-            Rational::integer(i)
+            bail!("unimplemented: §8.1 eps_decade definition bennett-circuits-v44 (milestone 3)");
         };
         return number(
             array(tables.get(name).ok_or("§8.1 unknown table")?)?
@@ -283,10 +274,10 @@ pub fn evaluate(
         .map(|x| evaluate(x, vars, tables))
         .collect::<Result<Vec<_>>>()?;
     Ok(match (op, a.as_slice()) {
-        ("+", [x, y]) => x.add(*y)?,
-        ("-", [x, y]) => x.add(y.negated()?)?,
-        ("*", [x, y]) => x.mul(*y)?,
-        ("/", [x, y]) => x.div(*y)?,
+        ("+", [x, y]) => x.checked_add(*y)?,
+        ("-", [x, y]) => x.checked_add(y.negated()?)?,
+        ("*", [x, y]) => x.checked_mul(*y)?,
+        ("/", [x, y]) => x.checked_div(*y)?,
         ("min", [x, y]) => {
             if x.compare(*y)?.is_lt() {
                 *x
@@ -312,7 +303,7 @@ pub fn evaluate(
             }
             let mut n = 0;
             while e.compare(Rational::ONE)?.is_lt() {
-                e = e.mul(Rational::integer(2))?;
+                e = e.checked_mul(Rational::integer(2))?;
                 n += 1;
             }
             Rational::integer(n)
@@ -516,6 +507,7 @@ impl Target {
             if !names.insert(n) || n == "native" {
                 bail!("§8.3 duplicate/reserved scheme name");
             }
+            keys(field(s, "realises")?, &["op", "controls", "params"])?;
             validate_signature(field(s, "realises")?)?;
             let a = field(s, "ancillae")?;
             keys(a, &["count", "state", "class"])?;
@@ -648,6 +640,12 @@ impl Target {
                 continue;
             }
             let error = nonnegative(evaluate(field(g, "epsilon")?, &vars, &self.tables)?)?;
+            if error == Rational::ZERO {
+                check_expr(field(g, "epsilon")?, &["k", "c"], &self.tables)?;
+                for e in map(field(g, "cost")?)?.values() {
+                    check_expr(e, &["k", "c"], &self.tables)?;
+                }
+            }
             if error.compare(eps)?.is_gt() {
                 continue;
             }
@@ -932,7 +930,7 @@ impl Target {
         }
         let error = leaves
             .iter()
-            .try_fold(Rational::ZERO, |e, l| e.add(l.error))?;
+            .try_fold(Rational::ZERO, |e, l| e.checked_add(l.error))?;
         if error.compare(eps)?.is_gt() {
             bail!("§8.3 scheme leaf errors exceed requested share");
         }
