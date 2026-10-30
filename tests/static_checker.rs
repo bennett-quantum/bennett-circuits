@@ -432,6 +432,10 @@ fn new_cleanup_and_selector_witnesses_agree_with_reference() {
             "selector",
             "perm_action @a (c:wire mut) () () () ()\nregs {  } bounds {1}\n^entry():\nqloop 1 while c {\nx c\nx c\n}\n",
         ),
+        (
+            "nonperm-call-window",
+            "action @id (x:wire mut) () () () ()\n^entry():\ns x\ns x\ns x\ns x\naction @a (x:wire mut) () () () ()\n^entry():\nd = qcopy x\naction_call @id (x) () () ()\nquncopy x d\n",
+        ),
     ] {
         let path = materialise(body, label);
         let ours = Object::parse(&std::fs::read_to_string(&path).unwrap()).and_then(|o| o.check());
@@ -478,4 +482,36 @@ fn imported_lproc_and_classical_calls_use_published_signature_schemas() {
         pinned_closure_hash: None,
     });
     assert_eq!(o.hash().unwrap().status, "unlinked");
+}
+
+#[test]
+fn imported_region_contracts_bind_cc_handles_without_a_body() {
+    use bennett_circuits::object::Import;
+    for (body, sig) in [
+        (
+            "fn cc @a (q:qreg[1]) () () () ()\n^entry():\naction_call @external (q) () () ()\nret\n",
+            r#"{"abi":"0.8","kind":"action","tier":"q","mut":[1],"in":[],"mem":[],"args":[],"bounds":[]}"#,
+        ),
+        (
+            "fn cc @a (q:qreg[1], x:qreg[1], fr:qreg[4], tk:token) () () () ()\n^entry():\noracle_call @external tk (x) q fr () ()\nret\n",
+            r#"{"abi":"0.8","kind":"oracle","tier":"q","in":[1],"tgt":1,"fault":4,"mem":[],"args":[]}"#,
+        ),
+    ] {
+        let mut o = generated(body);
+        o.imports.push(Import {
+            name: "external".into(),
+            signature: Value::parse(sig).unwrap(),
+            pinned_closure_hash: None,
+        });
+        assert_eq!(o.hash().unwrap().status, "unlinked");
+    }
+}
+
+#[test]
+fn nonpermutation_call_closes_dependency_window_even_for_identity_body() {
+    let body = "action @id (x:wire mut) () () () ()\n^entry():\ns x\ns x\ns x\ns x\naction @a (x:wire mut) () () () ()\n^entry():\nd = qcopy x\naction_call @id (x) () () ()\nquncopy x d\n";
+    let e = generated(body)
+        .hash()
+        .expect_err("opaque non-permutation call must close the window");
+    assert!(e.0.contains("§6.2"), "{e}");
 }

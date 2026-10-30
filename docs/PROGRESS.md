@@ -331,3 +331,18 @@ implemented; expected-table/external-library/structural replay remains staged.
 The suite A/B CLI obligations above remain acceptance work, not exclusions.
 **Milestone 2 remains incomplete. pk3 and pk3.2 must stay open.**
 No observed reference disagreement, so no deciding-spec divergence to report.
+
+## 2026-10-30 — resumed M2 schema and call provenance audit
+
+- Red-green: full-width certificate domain integers no longer stop at u128;
+  bounds are compared exactly and domain names/cell indices are unique. The
+  borrowed full-D comparison also supports arbitrary-width decimal bounds.
+- CC imported action/oracle calls now validate the published signature
+  without requiring a body. This extends the earlier lproc/classical support.
+- Fixed a §6.2 false acceptance: a non-permutation action made only of
+  diagonal gates still closes a copied dependency's window at the call
+  boundary. Analysis now retains contract events through flattening. The new
+  correctly hashed negative witness agrees with the reference CLI.
+- Focused checks: 20 static checker tests and 2 new domain tests pass;
+  conformance-object verdict/citation agreement remains 42/42. Full gates
+  and conformance reruns follow. M2 remains in progress; pk3/.2 stay open.

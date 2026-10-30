@@ -1,7 +1,7 @@
 //! ISA 0.8 producer validation. Independent of stored identity and execution.
 use crate::{
     Error, Result, bail,
-    flatten::{Flat, FlatGate, flatten},
+    flatten::{Flat, FlatGate},
     ir::*,
     object::*,
 };
@@ -113,7 +113,60 @@ fn callee_contract(o: &Object, n: &str) -> Result<Function> {
                 role: None,
             });
         }
-        _ => bail!("unimplemented: §3.3 imported quantum-region contract expansion (milestone 2)"),
+        FnKind::Oracle | FnKind::Action | FnKind::PermAction => {
+            let oracle = kind == FnKind::Oracle;
+            if oracle {
+                add(0, "in", true)?;
+                add(4, "args", false)?;
+            } else {
+                add(0, "mut", true)?;
+                add(1, "in", true)?;
+                add(3, "args", false)?;
+            }
+            // Quantum interfaces use wires; lifted call sites separately bind
+            // those published widths to locations (§3.3).
+            for ps in &mut groups[..if oracle { 1 } else { 2 }] {
+                for p in ps {
+                    if let Type::Reg(w) = p.ty {
+                        p.ty = Type::Wire(w);
+                    }
+                }
+            }
+            if oracle {
+                for (group, key) in [(1, "tgt"), (2, "fault")] {
+                    let w = s
+                        .get(key)
+                        .and_then(|v| v.as_u64())
+                        .and_then(|w| u32::try_from(w).ok())
+                        .ok_or_else(|| err("host limit: import wire width"))?;
+                    groups[group].push(Param {
+                        name: key.into(),
+                        ty: Type::Wire(w),
+                        role: None,
+                    });
+                }
+            }
+            let mem_group = if oracle { 3 } else { 2 };
+            for (i, mem) in s
+                .get("mem")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| err("checker: import mem (§9.1)"))?
+                .iter()
+                .enumerate()
+            {
+                let dim = |k| {
+                    mem.get(k)
+                        .and_then(|v| v.as_u64())
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| err("host limit: imported memory geometry"))
+                };
+                groups[mem_group].push(Param {
+                    name: format!("mem{i}"),
+                    ty: Type::Region(dim("A")?, dim("W")?),
+                    role: mem.get("role").and_then(|v| v.as_str()).map(str::to_owned),
+                });
+            }
+        }
     }
     Ok(Function {
         kind,
@@ -837,7 +890,7 @@ fn adj_name(g: BaseGate) -> String {
 }
 fn abstract_action(o: &Object, f: &Function, p: &Program) -> Result<()> {
     validate_pairs(p)?;
-    let flat = flatten(p)?;
+    let (flat, nonperm_calls) = crate::flatten::flatten_with_events(p)?;
     let top = p.top_circuit()?;
     let mut offset = 0;
     let mut readonly = BTreeSet::new();
@@ -865,8 +918,16 @@ fn abstract_action(o: &Object, f: &Function, p: &Program) -> Result<()> {
     }
     borrow_frames(o, f, top, &flat, &borrowed)?;
     let reduced = cancel_adjoints(&flat.gates);
-    let (_, _, closed) = action_values(flat.num_qubits, &ws, &borrowed, top.perm, &flat.gates)?;
-    let (values, initial, _) = action_values(flat.num_qubits, &ws, &borrowed, top.perm, &reduced)?;
+    let (_, _, closed) = action_values(
+        flat.num_qubits,
+        &ws,
+        &borrowed,
+        top.perm,
+        &flat.gates,
+        &nonperm_calls,
+    )?;
+    let (values, initial, _) =
+        action_values(flat.num_qubits, &ws, &borrowed, top.perm, &reduced, &[])?;
     for q in ws {
         if values[q] != initial[q] {
             bail!("checker: workspace {q} has no exact matched cleanup (§6.2)")
@@ -912,6 +973,7 @@ fn action_values(
     borrowed: &BTreeSet<usize>,
     perm_action: bool,
     gates: &[FlatGate],
+    nonperm_calls: &[(usize, Vec<usize>)],
 ) -> Result<(Vec<usize>, Vec<usize>, BTreeSet<usize>)> {
     let mut algebra = Algebra::new();
     let one = algebra.intern(Expr::And(vec![]));
@@ -930,7 +992,14 @@ fn action_values(
     let mut dirty_quantum = BTreeSet::new();
     let mut other = vec![false; num_qubits];
     let mut input_other = BTreeMap::new();
-    for g in gates {
+    for (ordinal, g) in gates.iter().enumerate() {
+        for (_, touched) in nonperm_calls.iter().filter(|(n, _)| *n == ordinal) {
+            for w in ws {
+                if values[*w] != 0 && touched.iter().any(|q| deps[*w].contains(q)) {
+                    closed.insert(*w);
+                }
+            }
+        }
         let diagonal = matches!(
             g.gate,
             BaseGate::S
@@ -1786,11 +1855,7 @@ fn classical_schema(o: &Object, f: &Function) -> Result<()> {
                         let Some(Operand::Sym(n)) = a.first() else {
                             bail!("checker: region target (§4.7)")
                         };
-                        let cf = o.function(n).ok_or_else(|| {
-                            err(format!(
-                                "unimplemented: imported region schema @{n} (milestone 2)"
-                            ))
-                        })?;
+                        let cf = callee_contract(o, n)?;
                         let mut actuals = Vec::new();
                         let mut expected = Vec::new();
                         if kind == "action_call" {

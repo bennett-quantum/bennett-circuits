@@ -19,22 +19,16 @@ fn array(v: &Value) -> Result<&[Value]> {
     v.as_array().ok_or_else(|| error("expected array"))
 }
 fn full_word(v: &Value, name: &str, width: u32) -> bool {
-    let number = |k: &str| -> Option<u128> {
+    let number = |k: &str| -> Option<&str> {
         match v.get(k)? {
-            Value::Int(s) | Value::Str(s) => s.parse().ok(),
+            Value::Int(s) | Value::Str(s) => Some(s),
             _ => None,
         }
     };
     v.get("name").and_then(Value::as_str) == Some(name)
-        && number("width") == Some(width as u128)
-        && number("lo") == Some(0)
-        && width <= 128
-        && number("hi")
-            == Some(if width == 128 {
-                u128::MAX
-            } else {
-                (1u128 << width) - 1
-            })
+        && number("width") == Some(width.to_string().as_str())
+        && number("lo") == Some("0")
+        && number("hi") == Some(crate::metadata::max_word(width).as_str())
 }
 fn domain(v: &Value, c: &Circuit) -> Result<()> {
     let bundles = array(get(v, "bundles")?)?;

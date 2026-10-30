@@ -29,10 +29,17 @@ pub struct Flat {
 }
 
 pub fn flatten(program: &Program) -> Result<Flat> {
+    Ok(flatten_with_events(program)?.0)
+}
+/// Static §6.2 events at gate boundaries. A call's declared contract
+/// closes windows even if its implementation consists of diagonal gates.
+pub(crate) type CallEvents = Vec<(usize, Vec<usize>)>;
+pub(crate) fn flatten_with_events(program: &Program) -> Result<(Flat, CallEvents)> {
     let top = program.top_circuit()?;
     let mut alloc = Allocator {
         next: 0,
         workspace: Vec::new(),
+        nonperm_calls: Vec::new(),
     };
     let mut map: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut interface = Vec::new();
@@ -43,17 +50,21 @@ pub fn flatten(program: &Program) -> Result<Flat> {
     }
     let mut gates = Vec::new();
     expand(top, program, &mut alloc, &map, &[], &mut gates, 0)?;
-    Ok(Flat {
-        num_qubits: alloc.next,
-        interface,
-        workspace: alloc.workspace,
-        gates,
-    })
+    Ok((
+        Flat {
+            num_qubits: alloc.next,
+            interface,
+            workspace: alloc.workspace,
+            gates,
+        },
+        alloc.nonperm_calls,
+    ))
 }
 
 struct Allocator {
     next: usize,
     workspace: Vec<usize>,
+    nonperm_calls: Vec<(usize, Vec<usize>)>,
 }
 
 impl Allocator {
@@ -250,6 +261,10 @@ fn expand(
                     call_map.insert(formal.clone(), wires);
                 }
                 let mut inh = ctrls(&map, inherited, controls)?;
+                if !target.perm {
+                    let touched = call_map.values().flatten().copied().collect();
+                    alloc.nonperm_calls.push((gates.len(), touched));
+                }
                 expand(&target, program, alloc, &call_map, &inh, gates, depth + 1)?;
                 inh.clear();
             }

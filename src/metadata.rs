@@ -33,6 +33,11 @@ fn string<'a>(v: &'a Value, path: &str) -> Result<&'a str> {
     v.as_str().ok_or_else(|| error(path, "expected string"))
 }
 fn natural(v: &Value, path: &str) -> Result<u128> {
+    let s = integer_text(v, path)?;
+    s.parse()
+        .map_err(|_| error(path, "host limit: integer exceeds u128"))
+}
+fn integer_text<'a>(v: &'a Value, path: &str) -> Result<&'a str> {
     let s = match v {
         Value::Int(s) | Value::Str(s) => s,
         _ => return Err(error(path, "expected nonnegative integer")),
@@ -40,8 +45,25 @@ fn natural(v: &Value, path: &str) -> Result<u128> {
     if s.is_empty() || s.len() > 1 && s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()) {
         return Err(error(path, "noncanonical integer"));
     }
-    s.parse()
-        .map_err(|_| error(path, "host limit: integer exceeds u128"))
+    Ok(s)
+}
+fn integer_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    a.len().cmp(&b.len()).then_with(|| a.cmp(b))
+}
+pub(crate) fn max_word(width: u32) -> String {
+    let mut digits = vec![0u8];
+    for _ in 0..width {
+        let mut carry = 1;
+        for d in &mut digits {
+            let v = *d * 2 + carry;
+            *d = v % 10;
+            carry = v / 10;
+        }
+        if carry != 0 {
+            digits.push(carry);
+        }
+    }
+    digits.iter().rev().map(|d| char::from(b'0' + d)).collect()
 }
 fn hash(v: &Value, path: &str) -> Result<()> {
     let s = string(v, path)?;
@@ -424,6 +446,7 @@ fn domain(v: &Value) -> Result<()> {
         &["bundles", "borrowed", "regions"],
         &["bundles", "borrowed", "regions"],
     )?;
+    let mut names = std::collections::BTreeSet::new();
     for k in ["bundles", "borrowed"] {
         for v in array(&d[k], p)? {
             let w = fields(
@@ -432,26 +455,50 @@ fn domain(v: &Value) -> Result<()> {
                 &["name", "width", "lo", "hi"],
                 &["name", "width", "lo", "hi"],
             )?;
-            string(&w["name"], p)?;
+            if !names.insert(string(&w["name"], p)?) {
+                return Err(error(p, "duplicate domain name"));
+            }
             let width = natural(&w["width"], p)?;
             if width == 0 {
                 return Err(error(p, "zero domain width"));
             }
-            let lo = natural(&w["lo"], p)?;
-            let hi = natural(&w["hi"], p)?;
-            if lo > hi || width < 128 && hi >= 1u128 << (width as u32) {
+            let lo = integer_text(&w["lo"], p)?;
+            let hi = integer_text(&w["hi"], p)?;
+            let width: u32 = width
+                .try_into()
+                .map_err(|_| error(p, "host limit: domain width exceeds u32"))?;
+            // Divide the supplied integer rather than constructing 2^width:
+            // even a very wide, sparse domain needs space only for its bound.
+            let mut digits = hi.bytes().map(|b| b - b'0').collect::<Vec<_>>();
+            let mut bits = 0u64;
+            while digits.iter().any(|d| *d != 0) {
+                let mut carry = 0;
+                for d in &mut digits {
+                    let v = carry * 10 + *d;
+                    *d = v / 2;
+                    carry = v % 2;
+                }
+                bits += 1;
+            }
+            if integer_cmp(lo, hi).is_gt() || bits > u64::from(width) {
                 return Err(error(p, "domain bounds out of range"));
             }
         }
     }
     for v in array(&d["regions"], p)? {
         let r = fields(v, p, &["name", "cells"], &["name", "cells"])?;
-        string(&r["name"], p)?;
+        if !names.insert(string(&r["name"], p)?) {
+            return Err(error(p, "duplicate domain name"));
+        }
         if r["cells"].as_str() != Some("all") {
+            let mut indices = std::collections::BTreeSet::new();
             for c in array(&r["cells"], p)? {
                 let c = fields(c, p, &["index", "lo", "hi"], &["index", "lo", "hi"])?;
-                for k in ["index", "lo", "hi"] {
-                    natural(&c[k], p)?;
+                if !indices.insert(integer_text(&c["index"], p)?) {
+                    return Err(error(p, "duplicate domain cell"));
+                }
+                if integer_cmp(integer_text(&c["lo"], p)?, integer_text(&c["hi"], p)?).is_gt() {
+                    return Err(error(p, "domain cell bounds reversed"));
                 }
             }
         }
@@ -839,4 +886,27 @@ fn certificate(v: &Value) -> Result<()> {
         decimal(v, p)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn domain_integers_are_not_limited_to_host_words() {
+        let hi = "231584178474632390847141970017375815706539969331281128078915168015826259279871";
+        let d = Value::parse(&format!(r#"{{"bundles":[{{"name":"x","width":257,"lo":"0","hi":"{hi}"}}],"borrowed":[],"regions":[]}}"#)).unwrap();
+        domain(&d).unwrap();
+        let bad = Value::parse(&d.to_jcs().replace("\"width\":257", "\"width\":256")).unwrap();
+        assert!(domain(&bad).is_err());
+    }
+    #[test]
+    fn domain_names_and_cell_indices_are_unique_and_bounds_are_ordered() {
+        for text in [
+            r#"{"bundles":[{"name":"x","width":1,"lo":0,"hi":1},{"name":"x","width":1,"lo":0,"hi":1}],"borrowed":[],"regions":[]}"#,
+            r#"{"bundles":[],"borrowed":[],"regions":[{"name":"r","cells":[{"index":0,"lo":2,"hi":1}]}]}"#,
+            r#"{"bundles":[],"borrowed":[],"regions":[{"name":"r","cells":[{"index":0,"lo":0,"hi":1},{"index":0,"lo":0,"hi":1}]}]}"#,
+        ] {
+            assert!(domain(&Value::parse(text).unwrap()).is_err(), "{text}");
+        }
+    }
 }

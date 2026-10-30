@@ -32,3 +32,9 @@ full §6.4 inherited-context keys; the A/B execution CLI acceptance probes.
 Existing explicit M2 errors are unfinished work, not scope reductions.
 Next milestone after actual M2 acceptance: M3 placement and scheduling.
 No pushes; no external repository edits; reference implementation CLI only.
+
+2026-10-30 resume: wide domain metadata, duplicate/reversed domain rejection,
+CC imported quantum signatures, and non-permutation call-boundary window
+events implemented red-green. New witness agrees with reference (now 94
+check comparisons in the documented overlapping categories). M2 is still
+in progress; full symbolic actions/certificate replay and A/B CLI remain.
