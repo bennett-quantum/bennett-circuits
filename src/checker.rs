@@ -1401,11 +1401,25 @@ pub fn validate(o: &Object) -> Result<()> {
             }
             action_readonly(o, f)?;
             crate::selectors::validate(o, f)?;
-            if (!f.groups[3].is_empty() || !o.imports.is_empty()) && crate::history::verify(o, f)? {
+            let has_local = all(f).iter().any(|i| {
+                matches!(
+                    i.opcode.as_str(),
+                    "qalloc" | "qborrow" | "qcopy" | "qload" | "qregion"
+                )
+            });
+            if (!f.groups[3].is_empty() || has_opaque_reference(o, f))
+                && !has_local
+                && static_parameter_action(o, f).is_ok()
+            {
                 continue;
             }
             if !f.groups[3].is_empty() {
-                if parameter_independent_action(o, f)? || composed_parameter_action(o, f)? {
+                // Preserve the existing universal independence/composition and
+                // exact gate-cancellation proofs before the complementary IR.
+                if parameter_independent_action(o, f)?
+                    || composed_parameter_action(o, f)?
+                    || crate::history::verify(o, f)?
+                {
                     continue;
                 } else if f.groups[3].iter().all(|p| p.ty == Type::F64) {
                     symbolic_angle_action(o, f)?;
@@ -1414,12 +1428,38 @@ pub fn validate(o: &Object) -> Result<()> {
                 }
                 continue;
             }
+            if has_opaque_reference(o, f) && crate::history::verify(o, f)? {
+                continue;
+            }
             let p = crate::lower::lower_program(o, &f.name)
                 .map_err(|e| err(format!("{} (§3.3/§5.1)", e.0)))?;
             abstract_action(o, f, &p)?;
         }
     }
     Ok(())
+}
+
+fn has_opaque_reference(o: &Object, f: &Function) -> bool {
+    let mut pending = vec![f];
+    let mut seen = BTreeSet::new();
+    while let Some(f) = pending.pop() {
+        if !seen.insert(&f.name) {
+            continue;
+        }
+        for i in all(f) {
+            for a in &i.operands {
+                if let Operand::Sym(n) = a {
+                    if o.imports.iter().any(|i| i.name == *n) {
+                        return true;
+                    }
+                    if let Some(cf) = o.function(n) {
+                        pending.push(cf);
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Erase only parameters syntactically absent from this computation.
@@ -1855,13 +1895,16 @@ pub(crate) fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
         }
         Ok(())
     }
-    if f.blocks.len() != 1 || !f.blocks[0].params.is_empty() {
-        bail!(
-            "unimplemented: §6 symbolic action CFG validation; decision bennett-circuits-7bu (milestone 2)"
-        )
+    if f.blocks.iter().any(|b| !b.params.is_empty()) {
+        bail!("checker: action block arguments have no branch binding (§5.3)")
     }
+    let body = f
+        .blocks
+        .iter()
+        .flat_map(|b| b.instrs.clone())
+        .collect::<Vec<_>>();
     let mut calls = Vec::new();
-    prepare(&f.blocks[0].instrs, &names, &[], &mut calls)?;
+    prepare(&body, &names, &[], &mut calls)?;
     for i in &calls {
         match i.opcode.as_str() {
             "action_call" => {
@@ -1951,9 +1994,7 @@ pub(crate) fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
                     let Operand::Sym(n) = op else {
                         bail!("checker: qinplace oracle symbol (§4.5)")
                     };
-                    let cf = o.function(n).ok_or_else(|| {
-                        err("unimplemented: qinplace imported inverse contract; decision bennett-circuits-4pf (milestone 2)")
-                    })?;
+                    let cf = callee_contract(o, n)?;
                     if cf.kind != FnKind::Oracle
                         || cf.groups[0].len() != 1
                         || cf.groups[0][0].ty.wire_width() != Some(*width)

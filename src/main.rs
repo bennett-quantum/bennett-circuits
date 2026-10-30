@@ -724,6 +724,17 @@ fn run_mode(args: &[String], draft: bool) -> Result<()> {
             Object::parse(&text)?
         };
         let mut options = args[3..].to_vec();
+        let expected_program =
+            if let Some(i) = options.iter().position(|a| a == "--expected-program") {
+                let hash = options
+                    .get(i + 1)
+                    .cloned()
+                    .ok_or("certificate: --expected-program requires a closure hash")?;
+                options.drain(i..i + 2);
+                Some(hash)
+            } else {
+                None
+            };
         let mut binding = |flag: &str| -> Result<String> {
             let i = options.iter().position(|a| a == flag).ok_or_else(|| {
                 bennett_circuits::Error(format!("certificate requires {flag} (§12.3)"))
@@ -745,14 +756,26 @@ fn run_mode(args: &[String], draft: bool) -> Result<()> {
             dialect_mapping_version: &mapping,
         };
         let opts = basis_options(&o, &options)?;
-        let cert = bennett_circuits::certificate::generate(
-            &o,
-            args[2].trim_start_matches('@'),
-            &opts.args,
-            opts.budget,
-            draft,
-            &context,
-        )?;
+        let cert = if let Some(hash) = expected_program {
+            bennett_circuits::certificate::generate_program(
+                &o,
+                args[2].trim_start_matches('@'),
+                &opts.args,
+                opts.budget,
+                draft,
+                &context,
+                &hash,
+            )?
+        } else {
+            bennett_circuits::certificate::generate(
+                &o,
+                args[2].trim_start_matches('@'),
+                &opts.args,
+                opts.budget,
+                draft,
+                &context,
+            )?
+        };
         if args[0] == "certify-object" {
             o.certificate = Some(cert);
             print!("{}", o.materialize()?.text());

@@ -613,7 +613,7 @@ fn legacy_numerical_claims_cannot_bypass_the_expansion_library_gate() {
     assert!(o.check().unwrap_err().0.contains("b-isa-spec-8r4"));
 }
 #[test]
-fn action_frames_do_not_mislabel_nested_oracle_history_as_scratch() {
+fn action_frames_preserve_nested_oracle_history_provenance() {
     use bennett_circuits::oracle::{Argument, Budget};
     let o=object("oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\noracle_call @o tk (x) t fr () ()\n").materialize().unwrap();
     let args = [Argument::Token(Budget {
@@ -622,10 +622,544 @@ fn action_frames_do_not_mislabel_nested_oracle_history_as_scratch() {
         stack: 0,
         depth: 0,
     })];
-    assert!(
+    let cert =
         bennett_circuits::certificate::generate(&o, "a", &args, None, true, &context(&target()))
+            .unwrap();
+    let region = cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert!(
+        !region
+            .get("frame")
+            .unwrap()
+            .get("history")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let p = bennett_circuits::oracle::specialise(
+        &o,
+        "o",
+        Budget {
+            steps: 1,
+            heap: 0,
+            stack: 0,
+            depth: 0,
+        },
+        &[],
+    )
+    .unwrap();
+    assert!(
+        p.circuits[0]
+            .workspace
+            .iter()
+            .any(|w| w.kind == bennett_circuits::ir::WsKind::RetainedHistory)
+    );
+}
+#[test]
+fn compact_program_relations_generate_without_materialising_tuple_rows() {
+    let o = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\n")
+        .materialize()
+        .unwrap();
+    let h = o.hash().unwrap().symbols["a"].closure_hash.clone().unwrap();
+    let cert = bennett_circuits::certificate::generate_program(
+        &o,
+        "a",
+        &[],
+        None,
+        true,
+        &context(&target()),
+        &h,
+    )
+    .unwrap();
+    let claims = cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .get("claims")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        claims[0]
+            .get("expected")
+            .unwrap()
+            .get("program")
+            .unwrap()
+            .as_str(),
+        Some(h.as_str())
+    );
+    assert!(claims[0].get("expected").unwrap().get("table").is_none());
+    let mut bound = o;
+    bound.draft_encodings = true;
+    bound.certificate = Some(cert);
+    bound.check().unwrap();
+}
+#[test]
+fn oracle_tables_cover_arbitrary_target_and_fault_in_signature_order() {
+    use bennett_circuits::oracle::Budget;
+    let o = object("oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\n")
+        .materialize()
+        .unwrap();
+    let cert = bennett_circuits::certificate::generate(
+        &o,
+        "o",
+        &[],
+        Some(Budget {
+            steps: 1,
+            heap: 0,
+            stack: 0,
+            depth: 0,
+        }),
+        true,
+        &context(&target()),
+    )
+    .unwrap();
+    let region = cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    let slots = region
+        .get("frame")
+        .unwrap()
+        .get("slots")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        slots
+            .iter()
+            .map(|s| s.get("id").unwrap().as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["in:0", "tgt:0", "fault:0"]
+    );
+    let rows = region.get("claims").unwrap().as_array().unwrap()[0]
+        .get("expected")
+        .unwrap()
+        .get("table")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(rows.len(), 64);
+    let last = rows.last().unwrap();
+    assert_eq!(
+        last.get("before").unwrap().get("bundles").unwrap(),
+        &Value::parse(r#"["1","1","15"]"#).unwrap()
+    );
+    assert_eq!(
+        last.get("after").unwrap().get("bundles").unwrap(),
+        &Value::parse(r#"["1","0","15"]"#).unwrap()
+    );
+    let mut bound = o;
+    bound.draft_encodings = true;
+    bound.certificate = Some(cert);
+    bound.check().unwrap();
+}
+#[test]
+fn histories_reject_noncall_modifiers_and_closed_control_dependencies() {
+    let bad = object("action @a (p:wire mut) () () (unused:token) ()\n^entry():\nctl p x p\n");
+    assert!(bad.hash().is_err());
+    let bad = object(
+        "action @a (p:wire mut) () () (unused:token) ()\n^entry():\nqpred p\nd = qalloc any 1\nh d\nqunpred p\nh p\nh p\nqpred p\nh d\nqfree d\nqunpred p\n",
+    );
+    assert!(bad.hash().unwrap_err().0.contains("§6.2"));
+}
+#[test]
+fn history_versions_cover_predicated_copies_and_oracle_reads() {
+    let bad = object(
+        "action @a (p:wire mut) (x:wire in) () (unused:token) ()\n^entry():\nqpred p\nd = qcopy x\nqunpred p\nh p\nh p\nqpred p\nquncopy x d\nqunpred p\n",
+    );
+    assert!(bad.hash().unwrap_err().0.contains("§6.2"));
+    let bad = object(
+        "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (x:wire mut) () () (tk:token) ()\n^entry():\nt = qalloc any 1\nf = qalloc any 4\noracle_call @o tk (x) t f () ()\nh x\nh x\noracle_call @o tk (x) t f () ()\nqfree t\nqfree f\n",
+    );
+    assert!(bad.hash().unwrap_err().0.contains("§6.2"));
+}
+#[test]
+fn history_rows_enforce_alias_class_result_and_active_selector_schemas() {
+    for body in [
+        "d = qcopy x\nquncopy d d\n",
+        "d = qalloc 7 1\nqfree d\n",
+        "r = qxor x y\n",
+        "p = qalloc any 1\nqpred p\nqfree p\nqunpred p\n",
+    ] {
+        let source = format!(
+            "action @a (x:wire mut, y:wire mut) () () (unused:token) ()\n^entry():\n{body}"
+        );
+        assert!(
+            object(&source).hash().is_err(),
+            "accepted malformed row: {body}"
+        );
+    }
+}
+#[test]
+fn symbolic_load_histories_span_calls_and_keep_region_versions() {
+    let body = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in, addr:wire in) (r:region[1,1] in) (tk:token) ()\n^entry():\nd = qload r addr\noracle_call @o tk (x) t fr () ()\nqunload r addr d\n";
+    object(body).hash().unwrap();
+    let bad = body.replace("qunload r addr d", "qunload r x d");
+    assert!(object(&bad).hash().unwrap_err().0.contains("§6.2"));
+}
+#[test]
+fn memory_versions_close_across_mutable_calls_even_after_their_adjoint() {
+    let prefix = "perm_action @change () (a:wire in, v:wire in) (r:region[1,1] mut) () ()\n^entry():\nqstore r a v\n";
+    let before = format!(
+        "{prefix}action @a () (a:wire in, v:wire in) (r:region[1,1] mut) (unused:token) ()\n^entry():\nd = qload r a\naction_call @change () (a, v) (r) ()\nadj action_call @change () (a, v) (r) ()\nqunload r a d\n"
+    );
+    assert!(object(&before).hash().unwrap_err().0.contains("§6.2"));
+    let during = format!(
+        "{prefix}action @a () (a:wire in, v:wire in) (r:region[1,1] mut) (unused:token) ()\n^entry():\naction_call @change () (a, v) (r) ()\nd = qload r a\nqunload r a d\nadj action_call @change () (a, v) (r) ()\n"
+    );
+    object(&during).hash().unwrap();
+    let bad = during.replace("qunload r a d", "e = qcopy d\nqunload r a e\nqunload r a d");
+    assert!(object(&bad).hash().unwrap_err().0.contains("§6.2"));
+}
+#[test]
+fn every_oracle_certificate_row_replays_with_arbitrary_targets_and_faults() {
+    use bennett_circuits::oracle::Budget;
+    use std::process::Command;
+    let o=object("oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @probe (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\noracle_call @o tk (x) t fr () ()\n").materialize().unwrap();
+    let cert = bennett_circuits::certificate::generate(
+        &o,
+        "o",
+        &[],
+        Some(Budget {
+            steps: 1,
+            heap: 0,
+            stack: 0,
+            depth: 0,
+        }),
+        true,
+        &context(&target()),
+    )
+    .unwrap();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/m4-oracle-rows");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("source.bisa");
+    std::fs::write(&path, o.text()).unwrap();
+    let binary = "/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref";
+    for command in ["check", "hash"] {
+        let output = Command::new(binary)
+            .arg(command)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report = Value::parse(std::str::from_utf8(&output.stdout).unwrap().trim()).unwrap();
+        assert_eq!(
+            report.get("object_hash").unwrap().as_str(),
+            Some(o.object_hash().as_str())
+        );
+    }
+    let row_bits = |tuple: &Value| {
+        let a = tuple
+            .get("bundles")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().parse::<u8>().unwrap())
+            .collect::<Vec<_>>();
+        format!(
+            "{}{}{}{}{}{}",
+            a[1],
+            a[2] & 1,
+            (a[2] >> 1) & 1,
+            (a[2] >> 2) & 1,
+            (a[2] >> 3) & 1,
+            a[0]
+        )
+    };
+    let claims = cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .get("claims")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let rows = claims[0]
+        .get("expected")
+        .unwrap()
+        .get("table")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    for row in rows {
+        let before = row_bits(row.get("before").unwrap());
+        let after = row_bits(row.get("after").unwrap());
+        let output = Command::new(binary)
+            .arg("run-action")
+            .arg(&path)
+            .args(["probe", "--basis", &before, "--arg", "token:1,0,0,0"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report =
+            Value::parse_target(std::str::from_utf8(&output.stdout).unwrap().trim()).unwrap();
+        let state = report.get("state").unwrap().as_object().unwrap();
+        assert_eq!(state.len(), 1);
+        assert_eq!(state[&after], Value::parse("[1,0]").unwrap());
+    }
+    let mut bound = o;
+    bound.draft_encodings = true;
+    bound.certificate = Some(cert);
+    let path = dir.join("certified.bisa");
+    std::fs::write(&path, bound.materialize().unwrap().text()).unwrap();
+    for command in ["check", "hash"] {
+        let output = Command::new(binary)
+            .arg(command)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("certificate version mismatch"));
+    }
+    eprintln!(
+        "M4 ORACLE CERTIFICATE: 64 full tuples agree, including arbitrary target/fault; draft check/hash stop at version boundary"
+    );
+}
+#[test]
+fn existing_exact_quantum_cancellation_is_preserved_with_unused_tokens() {
+    let o = object(
+        "action @phase () (x:wire in) () () ()\n^entry():\ns x\naction @a () () () (unused:token) ()\n^entry():\nd = qalloc any 1\nh d\naction_call @phase () (d) () ()\nadj action_call @phase () (d) () ()\nh d\nqfree d\n",
+    );
+    o.hash().unwrap();
+}
+#[test]
+fn program_relation_compatibility_uses_operand_contracts_not_permutation_markers() {
+    let o=object("action @a (x:wire mut) () () () ()\n^entry():\nx x\nperm_action @expected (x:wire mut) () () () ()\n^entry():\nx x\n").materialize().unwrap();
+    let h = o.hash().unwrap().symbols["expected"]
+        .closure_hash
+        .clone()
+        .unwrap();
+    bennett_circuits::certificate::generate_program(
+        &o,
+        "a",
+        &[],
+        None,
+        true,
+        &context(&target()),
+        &h,
+    )
+    .unwrap();
+}
+#[test]
+fn interface_only_symbolic_loops_are_checked_by_composition_not_unrolled() {
+    let o = object(
+        "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\nregs {  } bounds {1000000000000}\n^entry():\nqloop 1000000000000 {\noracle_call @o tk (x) t fr () ()\n}\n",
+    );
+    o.hash().unwrap();
+}
+#[test]
+fn budget_guarded_qinplace_does_not_get_a_parameter_uniform_adjoint_claim() {
+    use bennett_circuits::oracle::{Argument, Budget};
+    let o=object("oracle @g (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\noracle @gi (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (x:wire mut) () () (tk:token) ()\n^entry():\nqinplace @g @gi tk x\n").materialize().unwrap();
+    let args = [Argument::Token(Budget {
+        steps: 1,
+        heap: 0,
+        stack: 0,
+        depth: 0,
+    })];
+    let cert =
+        bennett_circuits::certificate::generate(&o, "a", &args, None, true, &context(&target()))
+            .unwrap();
+    let claims = cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .get("claims")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let adj = claims
+        .iter()
+        .find(|c| c.get("rule").and_then(Value::as_str) == Some("adjoint_table"))
+        .unwrap();
+    assert_eq!(adj.get("invocation"), claims[0].get("invocation"));
+}
+#[test]
+fn nested_qinplace_never_emits_a_packet_missing_its_owner_proof() {
+    use bennett_circuits::oracle::{Argument, Budget};
+    let o=object("oracle @g (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\noracle @gi (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @helper (x:wire mut) () () (tk:token) ()\n^entry():\nqinplace @g @gi tk x\naction @root (x:wire mut) () () (tk:token) ()\n^entry():\naction_call @helper (x) () () (tk)\n").materialize().unwrap();
+    let args = [Argument::Token(Budget {
+        steps: 1,
+        heap: 0,
+        stack: 0,
+        depth: 0,
+    })];
+    assert!(
+        bennett_circuits::certificate::generate(&o, "root", &args, None, true, &context(&target()))
             .unwrap_err()
             .0
-            .contains("bennett-circuits-4fa")
+            .contains("bennett-circuits-4pf")
+    );
+}
+#[test]
+fn draft_certificate_cannot_relabel_the_bound_source_isa_or_abi() {
+    let mut o = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\n")
+        .materialize()
+        .unwrap();
+    let cert =
+        bennett_circuits::certificate::generate(&o, "a", &[], None, true, &context(&target()))
+            .unwrap();
+    o.draft_encodings = true;
+    for key in ["isa", "object", "launch", "sched", "coverage", "target"] {
+        let bad = cert
+            .to_jcs()
+            .replace(&format!("\"{key}\":\"0.8\""), &format!("\"{key}\":\"0.9\""));
+        o.certificate = Some(Value::parse(&bad).unwrap());
+        assert!(o.check().is_err(), "accepted conflicting {key} version");
+    }
+}
+#[test]
+fn oracle_fault_histograms_are_computed_over_the_declared_full_domain() {
+    use bennett_circuits::oracle::Budget;
+    let o = object("oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\n")
+        .materialize()
+        .unwrap();
+    let cert = bennett_circuits::certificate::generate(
+        &o,
+        "o",
+        &[],
+        Some(Budget {
+            steps: 0,
+            heap: 0,
+            stack: 0,
+            depth: 0,
+        }),
+        true,
+        &context(&target()),
+    )
+    .unwrap();
+    let region = cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(
+        region
+            .get("verification")
+            .unwrap()
+            .get("fault_rate")
+            .unwrap()
+            .get("faults_by_code")
+            .unwrap()
+            .get("1")
+            .unwrap()
+            .as_u64(),
+        Some(64)
+    );
+}
+#[test]
+fn oracle_reference_program_hash_is_checked_before_claim_replay() {
+    use bennett_circuits::oracle::Budget;
+    let mut o =
+        object("oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\n")
+            .materialize()
+            .unwrap();
+    let cert = bennett_circuits::certificate::generate(
+        &o,
+        "o",
+        &[],
+        Some(Budget {
+            steps: 1,
+            heap: 0,
+            stack: 0,
+            depth: 0,
+        }),
+        true,
+        &context(&target()),
+    )
+    .unwrap();
+    let h = cert
+        .get("bindings")
+        .unwrap()
+        .get("reference_program_hash")
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let bad = cert.to_jcs().replace(
+        &format!("\"reference_program_hash\":\"{h}\""),
+        &format!("\"reference_program_hash\":\"{}\"", "0".repeat(64)),
+    );
+    o.draft_encodings = true;
+    o.certificate = Some(Value::parse(&bad).unwrap());
+    assert!(o.check().is_err());
+}
+#[test]
+fn linking_preserves_a_certificate_subject_instead_of_guessing_an_entry() {
+    let mut leaf = object("perm_action @leaf (x:wire mut) () () () ()\n^entry():\nx x\n")
+        .materialize()
+        .unwrap();
+    let hash = leaf.hash().unwrap().symbols["leaf"]
+        .closure_hash
+        .clone()
+        .unwrap();
+    leaf.draft_encodings = true;
+    leaf.certificate = Some(
+        bennett_circuits::certificate::generate(
+            &leaf,
+            "leaf",
+            &[],
+            None,
+            true,
+            &context(&target()),
+        )
+        .unwrap(),
+    );
+    let mut root = object(
+        "perm_action @root (x:wire mut) () () () ()\n^entry():\naction_call @leaf (x) () () ()\n",
+    );
+    root.imports.push(bennett_circuits::object::Import {
+        name: "leaf".into(),
+        signature: leaf.symbols[0].signature.clone(),
+        pinned_closure_hash: None,
+    });
+    let linked = link(&root, &[leaf]).unwrap();
+    assert_eq!(
+        linked
+            .object
+            .certificate
+            .as_ref()
+            .unwrap()
+            .get("bindings")
+            .unwrap()
+            .get("closure_hash")
+            .unwrap()
+            .as_str(),
+        Some(hash.as_str())
     );
 }

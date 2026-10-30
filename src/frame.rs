@@ -211,21 +211,19 @@ pub fn placed(
         .and_then(Value::as_str)
         .ok_or("frame: placed region binding")?;
     let f = o.function(name).ok_or("frame: missing source function")?;
-    if f.kind == crate::object::FnKind::Oracle
-        || p.source.circuits.iter().any(|c| {
-            o.functions.iter().any(|f| {
-                f.kind == crate::object::FnKind::Oracle
-                    && c.name.split('$').next() == Some(f.name.as_str())
-            })
-        })
-    {
-        bail!(
-            "unimplemented: literal-oracle retained history classification; bennett-circuits-4fa (M4; §9.4)"
-        )
+    let mut starts = BTreeMap::new();
+    let mut interface_width = 0;
+    for (n, w) in p.source.top_circuit()?.interface_bundles() {
+        starts.insert(n, interface_width);
+        interface_width += w as usize;
     }
-    let mut offset = 0;
     let mut slots = vec![];
-    for (g, role) in [(0, "mut"), (1, "in"), (2, "mem")] {
+    let groups = if f.kind == crate::object::FnKind::Oracle {
+        vec![(0, "in"), (1, "tgt"), (2, "fault"), (3, "mem")]
+    } else {
+        vec![(0, "mut"), (1, "in"), (2, "mem")]
+    };
+    for (g, role) in groups {
         for (i, param) in f.groups[g].iter().enumerate() {
             let width = match param.ty {
                 crate::object::Type::Wire(w) => w as usize,
@@ -236,6 +234,9 @@ pub fn placed(
                 }
                 _ => bail!("frame: interface type (§9.4)"),
             };
+            let offset = *starts
+                .get(&param.name)
+                .ok_or("frame: source interface mapping")?;
             let class = p.classes.get(offset).ok_or("frame: missing class")?;
             if p.classes[offset..offset + width].iter().any(|k| k != class) {
                 bail!("unimplemented: heterogeneous slot class; bennett-circuits-4fa (§9.4)")
@@ -253,13 +254,13 @@ pub fn placed(
                 ("class", Value::Str(class.clone())),
                 ("width", Value::Int(width.to_string())),
             ]));
-            offset += width;
         }
     }
     let mut scratch = vec![];
+    let mut history = vec![];
     let mut borrow = vec![];
     let mut ancillae = vec![];
-    for q in offset..p.classes.len() {
+    for q in interface_width..p.classes.len() {
         let dirty = p.wires.iter().any(|w| w.wire == q && w.dirty);
         let borrowed = p
             .placement
@@ -271,7 +272,15 @@ pub fn placed(
             ("class".into(), Value::Str(p.classes[q].clone())),
             ("width".into(), Value::Int("1".into())),
         ]);
-        if borrowed {
+        if p.placement
+            .lifetimes
+            .iter()
+            .any(|l| l.physical == q && l.kind == crate::ir::WsKind::RetainedHistory)
+        {
+            // One physical frame owns this slot for the bound invocation;
+            // temporary clean reuse within that frame is not a second frame.
+            history.push(Value::Object(record));
+        } else if borrowed {
             borrow.push(Value::Object(record));
         } else {
             record.insert(
@@ -307,7 +316,7 @@ pub fn placed(
         &crate::certificate::obj([
             ("slots", Value::Array(slots)),
             ("scratch", Value::Array(scratch)),
-            ("history", Value::Array(vec![])),
+            ("history", Value::Array(history)),
             ("borrow", Value::Array(borrow)),
             ("ancillae", Value::Array(ancillae)),
         ]),

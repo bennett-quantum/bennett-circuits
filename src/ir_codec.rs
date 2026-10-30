@@ -258,7 +258,7 @@ fn rbundles(v: &V) -> Result<Vec<Bundle>> {
 }
 pub(crate) fn encode(p: &Program) -> V {
     a([
-        s("bc-ir-2"),
+        s("bc-ir-3"),
         s(&p.top),
         a(p.circuits.iter().map(|c| {
             a([
@@ -275,6 +275,7 @@ pub(crate) fn encode(p: &Program) -> V {
                         n(w.width),
                         s(match w.kind {
                             WsKind::Clean => "clean",
+                            WsKind::RetainedHistory => "history",
                             WsKind::Borrowed => "borrowed",
                             WsKind::LocalRegion => "region",
                         }),
@@ -291,7 +292,7 @@ pub(crate) fn encode(p: &Program) -> V {
 }
 pub(crate) fn decode(v: &V) -> Result<Program> {
     let p = fields(v, 3)?;
-    if st(&p[0])? != "bc-ir-2" {
+    if !["bc-ir-2", "bc-ir-3"].contains(&st(&p[0])?.as_str()) {
         return Err(Error("QASM metadata: bad version".into()));
     }
     let circuits = list(&p[2])?
@@ -327,6 +328,7 @@ pub(crate) fn decode(v: &V) -> Result<Program> {
                             width: num(&w[1])?,
                             kind: match st(&w[2])?.as_str() {
                                 "clean" => WsKind::Clean,
+                                "history" if st(&p[0])? == "bc-ir-3" => WsKind::RetainedHistory,
                                 "borrowed" => WsKind::Borrowed,
                                 "region" => WsKind::LocalRegion,
                                 _ => return Err(Error("QASM metadata: bad workspace kind".into())),

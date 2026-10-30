@@ -242,14 +242,6 @@ impl Registry {
             )]));
         }
         if let Some(Value::Object(mut cert)) = composed {
-            let root_name = &root
-                .functions
-                .first()
-                .ok_or("link: certificate root function missing")?
-                .name;
-            let root_hash = identities
-                .get(root_name)
-                .ok_or("link: missing root identity")?;
             cert.insert("regions".into(), Value::Object(records));
             let Value::Object(bindings) = cert
                 .get_mut("bindings")
@@ -258,23 +250,8 @@ impl Registry {
                 bail!("link: bindings record")
             };
             bindings.insert("object_hash".into(), Value::Str(linked.object_hash()));
-            bindings.insert(
-                "reference_program_hash".into(),
-                Value::Str(root_hash.interface_hash.clone()),
-            );
-            bindings.insert(
-                "interface_hash".into(),
-                Value::Str(root_hash.interface_hash.clone()),
-            );
-            bindings.insert(
-                "closure_hash".into(),
-                Value::Str(
-                    root_hash
-                        .closure_hash
-                        .clone()
-                        .ok_or("link: unresolved root")?,
-                ),
-            );
+            // Typed identity fields were rebound above for the actual chosen
+            // subject. Linking does not designate a new region entry point.
             linked.certificate = Some(Value::Object(cert));
             linked = linked.materialize()?;
         }

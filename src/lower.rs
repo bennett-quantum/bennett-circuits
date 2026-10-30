@@ -258,7 +258,7 @@ impl<'a> FnLower<'a> {
         let physical = self.fresh(textual);
         self.rename.insert(textual.to_string(), physical.clone());
         let bk = match kind {
-            WsKind::Clean => BundleKind::CleanWs,
+            WsKind::Clean | WsKind::RetainedHistory => BundleKind::CleanWs,
             WsKind::Borrowed => BundleKind::BorrowedWs,
             WsKind::LocalRegion => BundleKind::RegionCells,
         };
@@ -542,7 +542,7 @@ impl<'a> FnLower<'a> {
         Ok(instr.lhs[0].clone())
     }
 
-    fn no_lhs_children(&self, instr: &Instr) -> Result<()> {
+    fn no_children(&self, instr: &Instr) -> Result<()> {
         if !instr.children.is_empty() {
             bail!(
                 "lower: @{} {} takes no brace group",
@@ -573,10 +573,13 @@ impl<'a> FnLower<'a> {
 
     fn lower_instr(&mut self, instr: &Instr, _nested: bool) -> Result<()> {
         let op = instr.opcode.as_str();
+        if !matches!(op, "qalloc" | "qborrow" | "qcopy" | "qload") && !instr.lhs.is_empty() {
+            bail!("lower: {} does not produce a result (§3.3)", instr.opcode)
+        }
         match op {
             // -- §4.4 gates -------------------------------------------------
             "x" | "h" | "s" | "sdg" | "t" | "tdg" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 1)?;
                 let gate = match op {
                     "x" => BaseGate::X,
@@ -590,7 +593,7 @@ impl<'a> FnLower<'a> {
                 self.emit_gate(gate, Vec::new(), vec![t])
             }
             "cx" | "cz" | "swap" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 2)?;
                 let a = self.wire_operand(&instr.operands[0], op)?;
                 let b = self.wire_operand(&instr.operands[1], op)?;
@@ -601,7 +604,7 @@ impl<'a> FnLower<'a> {
                 }
             }
             "ccx" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 3)?;
                 let c1 = self.wire_operand(&instr.operands[0], op)?;
                 let c2 = self.wire_operand(&instr.operands[1], op)?;
@@ -609,7 +612,7 @@ impl<'a> FnLower<'a> {
                 self.emit_gate(BaseGate::X, vec![c1, c2], vec![t])
             }
             "mcx" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 2)?;
                 let Operand::List(cs) = &instr.operands[0] else {
                     bail!(
@@ -637,7 +640,7 @@ impl<'a> FnLower<'a> {
                 self.emit_gate(BaseGate::X, ctrls, vec![t])
             }
             "rx" | "ry" | "rz" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 2)?;
                 let theta = self.angle(instr)?;
                 let gate = match op {
@@ -650,7 +653,7 @@ impl<'a> FnLower<'a> {
             }
             // -- §4.3 allocation ---------------------------------------------
             "qalloc" | "qborrow" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 2)?;
                 let class = match &instr.operands[0] {
                     Operand::Name(n) => n.clone(),
@@ -676,7 +679,7 @@ impl<'a> FnLower<'a> {
                 Ok(())
             }
             "qfree" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 1)?;
                 let Operand::Name(n) = &instr.operands[0] else {
                     bail!("lower: @{} qfree operand must be a bundle", self.f.name);
@@ -685,7 +688,7 @@ impl<'a> FnLower<'a> {
                 Ok(())
             }
             "qreturn" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 1)?;
                 let Operand::Name(n) = &instr.operands[0] else {
                     bail!("lower: @{} qreturn operand must be a bundle", self.f.name);
@@ -695,7 +698,7 @@ impl<'a> FnLower<'a> {
             }
             // -- §4.5 copy / XOR / exchange ----------------------------------
             "qcopy" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 1)?;
                 let src = self.bundle_operand(&instr.operands[0], op)?;
                 let width = self.width(&src)?;
@@ -706,7 +709,7 @@ impl<'a> FnLower<'a> {
                 Ok(())
             }
             "quncopy" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 2)?;
                 let src = self.bundle_operand(&instr.operands[0], op)?;
                 let Operand::Name(d) = &instr.operands[1] else {
@@ -718,7 +721,7 @@ impl<'a> FnLower<'a> {
                 Ok(())
             }
             "qxor" | "qexch" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 2)?;
                 let a = self.bundle_operand(&instr.operands[0], op)?;
                 let b = self.bundle_operand(&instr.operands[1], op)?;
@@ -741,7 +744,7 @@ impl<'a> FnLower<'a> {
             // -- §4.6 regions and quantum memory -----------------------------
             "qregion" => Ok(()),
             "qload" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 2)?;
                 let (region, addr, cell_w) = self.region_and_addr(instr, 0, 1)?;
                 let dst = self.lhs1(instr)?;
@@ -756,7 +759,7 @@ impl<'a> FnLower<'a> {
                 Ok(())
             }
             "qunload" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 3)?;
                 let (region, addr, _) = self.region_and_addr(instr, 0, 1)?;
                 let Operand::Name(d) = &instr.operands[2] else {
@@ -773,7 +776,7 @@ impl<'a> FnLower<'a> {
                 Ok(())
             }
             "qstore" | "qexchm" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 3)?;
                 let (region, addr, cell_w) = self.region_and_addr(instr, 0, 1)?;
                 let val = self.bundle_operand(&instr.operands[2], op)?;
@@ -799,14 +802,14 @@ impl<'a> FnLower<'a> {
                 Ok(())
             }
             "qpred" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 1)?;
                 let w = self.wire_operand(&instr.operands[0], op)?;
                 self.pred.push(w);
                 Ok(())
             }
             "qunpred" => {
-                self.no_lhs_children(instr)?;
+                self.no_children(instr)?;
                 self.expect_operands(instr, 1)?;
                 let w = self.wire_operand(&instr.operands[0], op)?;
                 match self.pred.pop() {
@@ -865,7 +868,7 @@ impl<'a> FnLower<'a> {
     }
 
     fn lower_qregion(&mut self, instr: &Instr) -> Result<()> {
-        self.no_lhs_children(instr)?;
+        self.no_children(instr)?;
         if instr.operands.len() != 3 && instr.operands.len() != 4 {
             bail!("lower: @{} qregion expects name A W [@image]", self.f.name);
         }
@@ -1058,7 +1061,7 @@ impl<'a> FnLower<'a> {
     }
 
     fn lower_call(&mut self, instr: &Instr) -> Result<()> {
-        self.no_lhs_children(instr)?;
+        self.no_children(instr)?;
         // Unpeel `ctl w` / `adj` prefixes (§4.7).
         let mut head = instr.opcode.clone();
         let mut operands: Vec<Operand> = instr.operands.clone();

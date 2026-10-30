@@ -79,9 +79,15 @@ fn place_validated_program(program: &Program) -> Result<Placement> {
     let mut clean = Vec::new();
     for allocation in allocations {
         for q in allocation.wires {
-            if allocation.kind == WsKind::Clean {
+            if matches!(allocation.kind, WsKind::Clean | WsKind::RetainedHistory) {
                 if let Some((start, end)) = uses[q] {
-                    clean.push((start, q, end, allocation.class.clone()));
+                    clean.push((
+                        start,
+                        q,
+                        end,
+                        allocation.class.clone(),
+                        allocation.kind == WsKind::RetainedHistory,
+                    ));
                 }
             } else {
                 mapping[q] = Some(next);
@@ -101,7 +107,7 @@ fn place_validated_program(program: &Program) -> Result<Placement> {
     // A physical slot has one requested class for its entire lifetime.
     let mut free: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
     let mut active: BTreeMap<(usize, usize), (String, usize)> = BTreeMap::new();
-    for (start, q, end, class) in clean {
+    for (start, q, end, class, history) in clean {
         while let Some((&key, _)) = active.first_key_value() {
             if key.0 > start {
                 break;
@@ -123,7 +129,11 @@ fn place_validated_program(program: &Program) -> Result<Placement> {
             physical,
             start,
             end,
-            kind: WsKind::Clean,
+            kind: if history {
+                WsKind::RetainedHistory
+            } else {
+                WsKind::Clean
+            },
             class,
         });
     }

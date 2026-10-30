@@ -28,6 +28,7 @@ pub fn pending(o: &Object) -> Vec<PendingObligation> {
 enum Term {
     Atom(String),
     Apply(String, Vec<Term>),
+    Permutation(String, Vec<Term>),
     Oracle(String, Vec<Term>),
     Xor(BTreeSet<Term>),
 }
@@ -35,7 +36,7 @@ fn quantum(t: &Term) -> bool {
     match t {
         Term::Apply(..) => true,
         Term::Xor(ts) => ts.iter().any(quantum),
-        Term::Oracle(_, ts) => ts.iter().any(quantum),
+        Term::Oracle(_, ts) | Term::Permutation(_, ts) => ts.iter().any(quantum),
         _ => false,
     }
 }
@@ -141,8 +142,13 @@ fn prepare(
         let mut plain = i.clone();
         let mut cs = active.clone();
         let mut adj = false;
+        let mut controlled = false;
         while matches!(plain.opcode.as_str(), "ctl" | "adj") {
             let count = if plain.opcode == "ctl" {
+                if controlled {
+                    bail!("history: repeated ctl modifier (§4.7)")
+                }
+                controlled = true;
                 let n = name(plain.operands.first().ok_or("history: ctl operand")?)?.to_string();
                 cs.push((n, true));
                 1
@@ -158,6 +164,11 @@ fn prepare(
             };
             plain.opcode = next.clone();
             plain.operands.drain(..count + 1);
+        }
+        if (adj || matches!(i.opcode.as_str(), "ctl" | "adj"))
+            && !matches!(plain.opcode.as_str(), "action_call" | "oracle_call")
+        {
+            bail!("history: modifiers require region calls (§4.7)")
         }
         if cs.len() != cs.iter().map(|(n, _)| n).collect::<BTreeSet<_>>().len() {
             bail!("history: duplicate effective control (§3.3)")
@@ -203,6 +214,8 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
     let supported = [
         "qalloc",
         "qcopy",
+        "qload",
+        "qunload",
         "quncopy",
         "qfree",
         "x",
@@ -248,6 +261,11 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
     }
     let mut deferred = false;
     let mut copies = BTreeMap::<String, String>::new();
+    let mut loads = BTreeMap::<String, (String, String)>::new();
+    let mut dependencies = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut producer_dependencies = BTreeMap::<Term, BTreeSet<String>>::new();
+    let mut allocation_ids = BTreeMap::<String, u64>::new();
+    let mut next_allocation = 0u64;
     let mut closed = BTreeSet::new();
     let read = |vs: &BTreeMap<String, Term>, n: &str| -> Result<Term> {
         vs.get(n)
@@ -287,7 +305,7 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
             op = n;
             args = &args[1..];
         }
-        if matches!(op, "qcopy" | "quncopy" | "qxor") {
+        if matches!(op, "qcopy" | "quncopy" | "qxor" | "qfree") {
             for a in args {
                 if let Operand::Name(n) = a
                     && controls.iter().any(|(c, _)| c == n)
@@ -297,6 +315,95 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
             }
         }
         match op {
+            "qload" => {
+                if args.len() != 2 || i.lhs.len() != 1 {
+                    bail!("history: qload arity/result (§3.3)")
+                }
+                let region = name(&args[0])?;
+                let addr = name(&args[1])?;
+                let dst = &i.lhs[0];
+                let Some(Type::Region(a, w)) = widths.get(region).cloned() else {
+                    bail!("history: qload region (§3.3)")
+                };
+                if widths.get(addr) != Some(&Type::Wire(a))
+                    || values.contains_key(dst)
+                    || controls.iter().any(|(n, _)| n == region || n == addr)
+                {
+                    bail!("history: qload width/liveness/disjointness (§3.3)")
+                }
+                if quantum(&read(&values, region)?) || quantum(&read(&values, addr)?) {
+                    return Ok(false);
+                }
+                let value = Term::Oracle(
+                    "load".into(),
+                    vec![
+                        read(&values, region)?,
+                        read(&values, addr)?,
+                        condition.clone(),
+                    ],
+                );
+                allocation_ids.insert(dst.clone(), next_allocation);
+                next_allocation = next_allocation
+                    .checked_add(1)
+                    .ok_or("host limit: symbolic allocation identity")?;
+                values.insert(dst.clone(), value);
+                widths.insert(dst.clone(), Type::Wire(w));
+                types.insert(dst.clone(), Type::Wire(w));
+                local.insert(dst.clone());
+                loads.insert(dst.clone(), (region.into(), addr.into()));
+                dependencies.insert(
+                    dst.clone(),
+                    [region.to_string(), addr.to_string()]
+                        .into_iter()
+                        .chain(controls.iter().map(|(n, _)| n.clone()))
+                        .collect(),
+                );
+            }
+            "qunload" => {
+                if args.len() != 3 || !i.lhs.is_empty() {
+                    bail!("history: qunload schema (§3.3)")
+                }
+                let region = name(&args[0])?;
+                let addr = name(&args[1])?;
+                let dst = name(&args[2])?;
+                if region == dst
+                    || addr == dst
+                    || !local.contains(dst)
+                    || controls
+                        .iter()
+                        .any(|(n, _)| n == region || n == addr || n == dst)
+                {
+                    bail!("history: qunload liveness/disjointness (§3.3)")
+                }
+                let Some(Type::Region(a, w)) = widths.get(region).cloned() else {
+                    bail!("history: qunload region (§3.3)")
+                };
+                if widths.get(addr) != Some(&Type::Wire(a))
+                    || widths.get(dst) != Some(&Type::Wire(w))
+                {
+                    bail!("history: qunload widths (§3.3)")
+                }
+                if loads.get(dst) != Some(&(region.into(), addr.into())) {
+                    bail!("history: qunload producer differs (§6.2)")
+                }
+                let expected = Term::Oracle(
+                    "load".into(),
+                    vec![
+                        read(&values, region)?,
+                        read(&values, addr)?,
+                        condition.clone(),
+                    ],
+                );
+                if !deferred && (closed.contains(dst) || read(&values, dst)? != expected) {
+                    bail!("history: qunload read version/window differs (§6.2)")
+                }
+                local.remove(dst);
+                values.remove(dst);
+                widths.remove(dst);
+                types.remove(dst);
+                dependencies.remove(dst);
+                loads.remove(dst);
+            }
             "qalloc" | "qcopy" => {
                 if i.lhs.len() != 1 || args.len() != if op == "qalloc" { 2 } else { 1 } {
                     bail!("history: allocation arity (§3.3)")
@@ -316,6 +423,7 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     }
                     (value, widths[src].clone())
                 } else {
+                    name(&args[0])?;
                     let Operand::Int(w) = &args[1] else {
                         bail!("history: literal allocation width (§3.3)")
                     };
@@ -331,8 +439,19 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     v = masked(v, &condition);
                 }
                 if op == "qcopy" {
-                    copies.insert(n.clone(), name(&args[0])?.into());
+                    let src = name(&args[0])?.to_string();
+                    copies.insert(n.clone(), src.clone());
+                    dependencies.insert(
+                        n.clone(),
+                        std::iter::once(src)
+                            .chain(controls.iter().map(|(n, _)| n.clone()))
+                            .collect(),
+                    );
                 }
+                allocation_ids.insert(n.clone(), next_allocation);
+                next_allocation = next_allocation
+                    .checked_add(1)
+                    .ok_or("host limit: symbolic allocation identity")?;
                 values.insert(n.clone(), v);
                 widths.insert(n.clone(), ty.clone());
                 types.insert(n.clone(), ty);
@@ -343,6 +462,12 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     bail!("history: release arity (§3.3)")
                 }
                 let n = name(args.last().unwrap())?;
+                if op == "quncopy" && copies.get(n).map(String::as_str) != Some(name(&args[0])?) {
+                    bail!("history: quncopy producer differs (§6.2)")
+                }
+                if op == "quncopy" && name(&args[0])? == n {
+                    bail!("history: quncopy source/target overlap (§3.3)")
+                }
                 if !local.remove(n) {
                     bail!("history: release is not local (§3.3)")
                 }
@@ -360,6 +485,8 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     )
                 }
                 copies.remove(n);
+                loads.remove(n);
+                dependencies.remove(n);
                 values.remove(n);
                 widths.remove(n);
                 types.remove(n);
@@ -407,18 +534,44 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     {
                         bail!("history: nonpermutation callee (§5.3)")
                     }
-                    let mutable = list(&args[1])?;
+                    let mut mutable = list(&args[1])?.to_vec();
+                    for (actual, formal) in list(&args[3])?.iter().zip(&callee_fn.groups[2]) {
+                        if formal.role.as_deref() == Some("mut") {
+                            mutable.push(actual.clone());
+                        }
+                    }
+                    let call_value = |key: String, values: Vec<Term>| {
+                        if callee_fn.kind == crate::object::FnKind::PermAction {
+                            Term::Permutation(key, values)
+                        } else {
+                            Term::Apply(key, values)
+                        }
+                    };
+
                     let mut context =
                         vec![Term::Atom(format!("args:{:?}", args[4])), condition.clone()];
-                    for n in list(&args[2])?.iter().chain(list(&args[3])?) {
+                    for n in list(&args[2])?
+                        .iter()
+                        .chain(list(&args[3])?.iter().filter(|n| !mutable.contains(n)))
+                    {
                         let value = read(&values, n)?;
                         if quantum(&value) && local.contains(n) {
                             closed.insert(n.clone());
                         }
                         context.push(value);
                     }
-                    let key = format!("call:{callee}:{}", if adj { "adj" } else { "forward" });
-                    let inverse = format!("call:{callee}:{}", if adj { "forward" } else { "adj" });
+                    let invocation_locations = mutable
+                        .iter()
+                        .map(|n| (n, allocation_ids.get(n).copied()))
+                        .collect::<Vec<_>>();
+                    let key = format!(
+                        "call:{callee}:{}:{invocation_locations:?}",
+                        if adj { "adj" } else { "forward" }
+                    );
+                    let inverse = format!(
+                        "call:{callee}:{}:{invocation_locations:?}",
+                        if adj { "forward" } else { "adj" }
+                    );
                     let prior = mutable
                         .iter()
                         .map(|n| read(&values, n))
@@ -436,7 +589,7 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                         }
                     }
                     let candidate = prior.first().and_then(|t| {
-                        if let Term::Apply(k, vs) = t {
+                        if let Term::Apply(k, vs) | Term::Permutation(k, vs) = t {
                             if k == &format!("{inverse}:0") {
                                 Some(vs.clone())
                             } else {
@@ -450,19 +603,64 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                         vs.len() == mutable.len() + context.len()
                             && vs[mutable.len()..] == context
                             && prior.iter().enumerate().all(|(j, t)| {
-                                *t == Term::Apply(format!("{inverse}:{j}"), vs.clone())
+                                *t == call_value(format!("{inverse}:{j}"), vs.clone())
                             })
                     });
                     let all = prior.iter().cloned().chain(context).collect::<Vec<_>>();
+                    let touched = mutable
+                        .iter()
+                        .chain(list(&args[2])?)
+                        .chain(list(&args[3])?)
+                        .chain(controls.iter().map(|(n, _)| n))
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    let changed_regions = mutable
+                        .iter()
+                        .filter(|n| matches!(widths.get(*n), Some(Type::Region(..))))
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    {
+                        let version_touches = if callee_fn.kind == crate::object::FnKind::PermAction
+                        {
+                            &changed_regions
+                        } else {
+                            &touched
+                        };
+                        for (w, deps) in &dependencies {
+                            if !(restores && mutable.contains(w))
+                                && values.get(w).is_some_and(|v| *v != zero())
+                                && !deps.is_disjoint(version_touches)
+                            {
+                                closed.insert(w.clone());
+                            }
+                        }
+                    }
+
                     for (j, n) in mutable.iter().enumerate() {
-                        values.insert(
-                            n.clone(),
-                            if restores {
-                                candidate.as_ref().unwrap()[j].clone()
-                            } else {
-                                Term::Apply(format!("{key}:{j}"), all.clone())
-                            },
-                        );
+                        let old_deps = dependencies.get(n).cloned().unwrap_or_default();
+                        let new = if restores {
+                            candidate.as_ref().unwrap()[j].clone()
+                        } else {
+                            call_value(format!("{key}:{j}"), all.clone())
+                        };
+                        let mut deps = if restores {
+                            producer_dependencies
+                                .get(&prior[j])
+                                .cloned()
+                                .unwrap_or_default()
+                        } else {
+                            let mut d = old_deps.clone();
+                            d.extend(touched.iter().filter(|w| *w != n).cloned());
+                            d
+                        };
+                        if !restores {
+                            producer_dependencies.insert(new.clone(), old_deps);
+                        }
+                        if new == zero() {
+                            deps.clear();
+                        }
+                        dependencies.insert(n.clone(), deps);
+                        values.insert(n.clone(), new);
                     }
                     continue;
                 }
@@ -486,24 +684,40 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     }
                     let old = read(&values, n)?;
                     let term = Term::Oracle(format!("oracle:{callee}:{slot}"), inputs.clone());
-                    values.insert(n.into(), xor(old, term));
+                    let new = xor(old, term);
+                    let deps = dependencies.entry(n.into()).or_default();
+                    deps.extend(
+                        list(&args[2])?
+                            .iter()
+                            .chain(list(&args[5])?)
+                            .cloned()
+                            .chain(controls.iter().map(|(n, _)| n.clone())),
+                    );
+                    if new == zero() {
+                        deps.clear();
+                    }
+                    values.insert(n.into(), new);
                 }
             }
             "qxor" => {
-                if args.len() != 2 {
-                    bail!("history: qxor arity (§3.3)")
+                if args.len() != 2 || !i.lhs.is_empty() {
+                    bail!("history: qxor arity/result schema (§3.3)")
                 }
                 let (a, b) = (name(&args[0])?, name(&args[1])?);
                 if a == b || widths.get(a) != widths.get(b) {
                     bail!("history: overlap/width (§3.3)")
                 }
-                if quantum(&read(&values, a)?) && local.contains(a) {
-                    closed.insert(a.to_string());
+                if quantum(&read(&values, a)?) {
+                    return Ok(false);
                 }
-                values.insert(
-                    b.into(),
-                    xor(masked(read(&values, a)?, &condition), read(&values, b)?),
-                );
+                let new = xor(masked(read(&values, a)?, &condition), read(&values, b)?);
+                let deps = dependencies.entry(b.into()).or_default();
+                deps.insert(a.into());
+                deps.extend(controls.iter().map(|(n, _)| n.clone()));
+                if new == zero() {
+                    deps.clear();
+                }
+                values.insert(b.into(), new);
             }
             _ => {
                 if adj {
@@ -517,11 +731,21 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                 if widths.get(n) != Some(&Type::Wire(1)) {
                     bail!("history: gate requires wire (§3.3)")
                 }
+                if controls.iter().any(|(c, _)| c == n) {
+                    bail!("history: effective control overlaps target (§3.3)")
+                }
                 let old = read(&values, n)?;
                 if f.kind == crate::object::FnKind::PermAction && op != "x" {
                     bail!("history: nonpermutation gate (§5.3)")
                 }
                 if matches!(op, "h" | "rx" | "ry") {
+                    for (w, deps) in &dependencies {
+                        if w != n && deps.contains(n) && values.get(w).is_some_and(|v| *v != zero())
+                        {
+                            closed.insert(w.clone());
+                        }
+                    }
+
                     for (copy, src) in &copies {
                         if src == n {
                             closed.insert(copy.clone());
@@ -537,9 +761,16 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     }
                 }
                 let key = if rotation {
-                    format!("{op}:{:?}:{condition:?}", args[0])
+                    format!(
+                        "{op}:{:?}:{condition:?}:wire:{n}:{}",
+                        args[0],
+                        allocation_ids.get(n).copied().unwrap_or(u64::MAX)
+                    )
                 } else {
-                    format!("{op}:{condition:?}")
+                    format!(
+                        "{op}:{condition:?}:wire:{n}:{}",
+                        allocation_ids.get(n).copied().unwrap_or(u64::MAX)
+                    )
                 };
                 let inverse = match op {
                     "sdg" => "s",
@@ -548,24 +779,43 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     "t" => "tdg",
                     _ => op,
                 };
-                let inverse = format!("{inverse}:{condition:?}");
+                let inverse = format!(
+                    "{inverse}:{condition:?}:wire:{n}:{}",
+                    allocation_ids.get(n).copied().unwrap_or(u64::MAX)
+                );
                 let diagonal = matches!(op, "s" | "sdg" | "t" | "tdg" | "rz");
                 // T5 phases on basis expressions do not alter their value;
                 // phases on quantum histories must remain in that history.
                 if diagonal && !quantum(&old) {
                     continue;
                 }
+                let old_deps = dependencies.get(n).cloned().unwrap_or_default();
+                let restores = matches!(&old,Term::Apply(prior,vs)if !rotation && prior==&inverse && vs.len()==1);
                 let new = if op == "x" {
-                    xor(old, condition.clone())
+                    xor(old.clone(), condition.clone())
                 } else if let Term::Apply(prior, vs) = &old {
                     if !rotation && prior == &inverse && vs.len() == 1 {
                         vs[0].clone()
                     } else {
-                        Term::Apply(key, vec![old])
+                        Term::Apply(key, vec![old.clone()])
                     }
                 } else {
-                    Term::Apply(key, vec![old])
+                    Term::Apply(key, vec![old.clone()])
                 };
+                let mut deps = if restores {
+                    producer_dependencies.get(&old).cloned().unwrap_or_default()
+                } else {
+                    let mut d = old_deps.clone();
+                    d.extend(controls.iter().map(|(n, _)| n.clone()));
+                    d
+                };
+                if !restores && matches!(new, Term::Apply(..)) {
+                    producer_dependencies.insert(new.clone(), old_deps);
+                }
+                if new == zero() {
+                    deps.clear();
+                }
+                dependencies.insert(n.into(), deps);
                 values.insert(n.into(), new);
             }
         }

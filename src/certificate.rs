@@ -137,6 +137,139 @@ fn program(o: &Object, f: &Function, args: &[Argument], b: Budget) -> Result<Pro
         crate::lower::lower_program_with_args(o, &f.name, args)
     }
 }
+fn uniform_adjoint(o: &Object, root: &Function) -> bool {
+    fn inspect<'a>(is: &'a [crate::object::Instr], out: &mut Vec<&'a crate::object::Instr>) {
+        for i in is {
+            out.push(i);
+            for b in &i.children {
+                inspect(b, out)
+            }
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![root];
+    while let Some(f) = pending.pop() {
+        if !seen.insert(&f.name) {
+            continue;
+        }
+        let mut rows = vec![];
+        for b in &f.blocks {
+            inspect(&b.instrs, &mut rows)
+        }
+        for i in rows {
+            if i.opcode == "qinplace" {
+                return false;
+            }
+            for a in &i.operands {
+                if let crate::object::Operand::Sym(n) = a
+                    && let Some(callee) = o.function(n)
+                {
+                    pending.push(callee)
+                }
+            }
+        }
+    }
+    true
+}
+fn nested_inverse_owner(o: &Object, root: &Function) -> Option<String> {
+    fn rows<'a>(is: &'a [crate::object::Instr], out: &mut Vec<&'a crate::object::Instr>) {
+        for i in is {
+            out.push(i);
+            for child in &i.children {
+                rows(child, out)
+            }
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut pending = vec![root];
+    while let Some(f) = pending.pop() {
+        if !seen.insert(&f.name) {
+            continue;
+        }
+        let mut body = vec![];
+        for b in &f.blocks {
+            rows(&b.instrs, &mut body)
+        }
+        for i in body {
+            if f.name != root.name && i.opcode == "qinplace" {
+                return Some(f.name.clone());
+            }
+            for a in &i.operands {
+                if let crate::object::Operand::Sym(n) = a
+                    && let Some(cf) = o.function(n)
+                {
+                    pending.push(cf)
+                }
+            }
+        }
+    }
+    None
+}
+fn direct_inverse_pairs(f: &Function, args: &[Argument]) -> Result<Vec<(String, String, Budget)>> {
+    fn visit(
+        is: &[crate::object::Instr],
+        env: &BTreeMap<String, Argument>,
+        out: &mut Vec<(String, String, Budget)>,
+    ) -> Result<()> {
+        for i in is {
+            if i.opcode == "qinplace" {
+                let [
+                    crate::object::Operand::Sym(g),
+                    crate::object::Operand::Sym(gi),
+                    crate::object::Operand::Name(token),
+                    _,
+                ] = i.operands.as_slice()
+                else {
+                    bail!("certificate: qinplace schema (§4.5)")
+                };
+                let Some(Argument::Token(b)) = env.get(token) else {
+                    bail!("certificate: unresolved qinplace token; bennett-circuits-4pf (§12.3)")
+                };
+                let value = (g.clone(), gi.clone(), *b);
+                if !out.contains(&value) {
+                    out.push(value)
+                }
+            }
+            if i.opcode == "qloop"
+                && i.operands.first() == Some(&crate::object::Operand::Int("0".into()))
+            {
+                continue;
+            }
+            for body in &i.children {
+                visit(body, env, out)?;
+            }
+        }
+        Ok(())
+    }
+    let mut pairs = vec![];
+    let env = f.groups[if f.kind == FnKind::Oracle { 4 } else { 3 }]
+        .iter()
+        .zip(args)
+        .map(|(p, a)| (p.name.clone(), a.clone()))
+        .collect();
+    for block in &f.blocks {
+        visit(&block.instrs, &env, &mut pairs)?
+    }
+    Ok(pairs)
+}
+fn compatible(a: &Function, b: &Function) -> Result<bool> {
+    if (a.kind == FnKind::Oracle) != (b.kind == FnKind::Oracle)
+        || (!a.is_action() && a.kind != FnKind::Oracle)
+        || (!b.is_action() && b.kind != FnKind::Oracle)
+    {
+        return Ok(false);
+    }
+    let normalize = |f: &Function| -> Result<V> {
+        let mut v = crate::object::derived_signature(f)?;
+        if f.is_action() {
+            let V::Object(m) = &mut v else { unreachable!() };
+            m.insert("kind".into(), strv("action"));
+            m.remove("bounds");
+        }
+        Ok(v)
+    };
+    Ok(normalize(a)? == normalize(b)?)
+}
 struct Space {
     flat: Flat,
     bundles: Vec<(String, Vec<usize>)>,
@@ -339,6 +472,61 @@ impl Space {
         }
         Ok(())
     }
+    fn fault_rate(&self, f: &Function) -> Result<V> {
+        let mut counts = BTreeMap::<String, String>::new();
+        if f.kind == FnKind::Oracle {
+            let fault = &self.bundles[f.groups[0].len() + 1].1;
+            self.each(|input| {
+                let output = self.execute(input)?;
+                let code = decimal(
+                    &fault
+                        .iter()
+                        .map(|q| input[*q] ^ output[*q])
+                        .collect::<Vec<_>>(),
+                );
+                if code != "0" {
+                    let value = counts.entry(code).or_insert_with(|| "0".into());
+                    let mut digits = value.bytes().rev().collect::<Vec<_>>();
+                    let mut carry = true;
+                    for d in &mut digits {
+                        if carry {
+                            if *d == b'9' {
+                                *d = b'0';
+                            } else {
+                                *d += 1;
+                                carry = false;
+                            }
+                        }
+                    }
+                    if carry {
+                        digits.push(b'1');
+                    }
+                    digits.reverse();
+                    *value = String::from_utf8(digits).expect("decimal digits");
+                }
+                Ok(())
+            })?;
+        }
+        let number = |text: String| {
+            if text
+                .parse::<u64>()
+                .is_ok_and(|n| n <= 9_007_199_254_740_991)
+            {
+                V::Int(text)
+            } else {
+                strv(text)
+            }
+        };
+        Ok(obj([
+            ("domain", self.domain()),
+            (
+                "faults_by_code",
+                V::Object(counts.into_iter().map(|(k, v)| (k, number(v))).collect()),
+            ),
+            ("undefined_excluded", num(0)),
+            ("layout_dependent_excluded", num(0)),
+        ]))
+    }
     fn rows(&self) -> Result<Vec<V>> {
         let mut rows = vec![];
         self.each(|bits| {
@@ -381,6 +569,30 @@ pub fn generate(
     draft: bool,
     context: &Context<'_>,
 ) -> Result<V> {
+    generate_relation(o, name, args, b, draft, context, None)
+}
+/// Generate the compact §12.1 program relation. Replay still quantifies the
+/// complete domain; no sample or finite-corpus verdict replaces the proof.
+pub fn generate_program(
+    o: &Object,
+    name: &str,
+    args: &[Argument],
+    b: Option<Budget>,
+    draft: bool,
+    context: &Context<'_>,
+    expected: &str,
+) -> Result<V> {
+    generate_relation(o, name, args, b, draft, context, Some(expected))
+}
+fn generate_relation(
+    o: &Object,
+    name: &str,
+    args: &[Argument],
+    b: Option<Budget>,
+    draft: bool,
+    context: &Context<'_>,
+    expected_program: Option<&str>,
+) -> Result<V> {
     if !draft {
         bail!("certificate: explicit --isa 0.9-draft required (§12 K13)")
     }
@@ -388,6 +600,12 @@ pub fn generate(
         bail!("certificate: obligations pending; link before proving (§9.3; bennett-circuits-z9r)")
     }
     let f = o.function(name).ok_or("certificate: unknown subject")?;
+    if let Some(owner) = nested_inverse_owner(o, f) {
+        bail!(
+            "unimplemented: nested qinplace owner @{owner} certificate/context composition; bennett-circuits-4pf (ISA question bennett-circuits-9su; §12.3)"
+        )
+    }
+
     let b = match (f.kind, b) {
         (FnKind::Oracle, None) => bail!("certificate: explicit oracle budget required (§12.3)"),
         (_, Some(b)) => b,
@@ -415,9 +633,16 @@ pub fn generate(
     let table = obj([
         ("kind", strv("exhaustive")),
         ("domain", space.domain()),
-        ("expected", obj([("table", arr(space.rows()?))])),
+        (
+            "expected",
+            if let Some(hash) = expected_program {
+                obj([("program", strv(hash))])
+            } else {
+                obj([("table", arr(space.rows()?))])
+            },
+        ),
         ("subject", subject),
-        ("invocation", inv),
+        ("invocation", inv.clone()),
     ]);
     let adjoint = obj([
         ("kind", strv("structural")),
@@ -426,7 +651,11 @@ pub fn generate(
         ("witness", obj([])),
         (
             "invocation",
-            obj([("args", strv("all")), ("budget", strv("all"))]),
+            if uniform_adjoint(o, f) {
+                obj([("args", strv("all")), ("budget", strv("all"))])
+            } else {
+                inv.clone()
+            },
         ),
     ]);
     if context.dialect_mapping_version.is_empty() {
@@ -522,15 +751,7 @@ pub fn generate(
                             ("inverse_pairs", arr(vec![])),
                             ("unitary", arr(vec![])),
                             ("channel", arr(vec![])),
-                            (
-                                "fault_rate",
-                                obj([
-                                    ("domain", space.domain()),
-                                    ("faults_by_code", obj([])),
-                                    ("undefined_excluded", num(0)),
-                                    ("layout_dependent_excluded", num(0)),
-                                ]),
-                            ),
+                            ("fault_rate", space.fault_rate(f)?),
                         ]),
                     ),
                 ]),
@@ -591,6 +812,9 @@ pub fn generate(
                 .collect(),
         ),
     );
+    for (g, gi, budget) in direct_inverse_pairs(f, args)? {
+        add_inverse_pair(o, &mut cert, name, &g, &gi, budget)?;
+    }
     bound.certificate = Some(cert.clone());
     crate::checker::validate(&bound)?;
     verify(&bound)?;
@@ -764,16 +988,43 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
     let Some(cert) = &o.certificate else {
         return Ok(());
     };
+    let versions = get(cert, "versions")?;
+    for (key, expected) in [
+        ("isa", &o.header.isa),
+        ("object", &o.header.object),
+        ("launch", &o.header.launch),
+        ("sched", &o.header.sched),
+        ("coverage", &o.header.coverage),
+        ("target", &o.header.target),
+    ] {
+        if let Some(actual) = versions.get(key)
+            && actual.as_str() != Some(expected)
+        {
+            bail!("certificate: {key} version conflicts with the bound source header (§12.3)")
+        }
+        if versions.get("cert").and_then(V::as_str) == Some("0.9") && versions.get(key).is_none() {
+            bail!("certificate: missing {key} version (§12.3)")
+        }
+    }
     let ids = o.identity()?;
     let bindings = get(cert, "bindings")?;
     if get(bindings, "object_hash")?.as_str() != Some(&o.object_hash()) {
         bail!("certificate: object binding mismatch (§12.3)")
     }
     let root = text(get(bindings, "closure_hash")?)?;
-    let root_hash = ids
-        .values()
-        .find(|h| h.closure_hash.as_deref() == Some(root))
+    let (root_name, root_hash) = ids
+        .iter()
+        .find(|(_, h)| h.closure_hash.as_deref() == Some(root))
         .ok_or("certificate: root closure unresolved")?;
+    let root_fn = o
+        .function(root_name)
+        .filter(|f| f.is_action() || f.kind == FnKind::Oracle)
+        .ok_or("certificate: root is not a quantum region (§12.3)")?;
+    if root_fn.kind == FnKind::Oracle
+        && get(bindings, "reference_program_hash")?.as_str() != Some(&root_hash.interface_hash)
+    {
+        bail!("certificate: oracle reference_program_hash binding differs (§9.2)")
+    }
     if get(bindings, "interface_hash")?.as_str() != Some(&root_hash.interface_hash) {
         bail!("certificate: root interface binding mismatch (§12.3)")
     }
@@ -835,6 +1086,11 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                         }
                         continue;
                     }
+                    if let Some(owner) = nested_inverse_owner(o, f) {
+                        bail!(
+                            "unimplemented: nested qinplace owner @{owner} proof/context replay; bennett-circuits-4pf (§12.3)"
+                        )
+                    }
                     let inv = get(claim, "invocation")?;
                     let (args, b) = resolve_invocation(o, f, inv)?;
                     let subject = get(claim, "subject")?;
@@ -877,9 +1133,7 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                         let other = o
                             .function(name)
                             .ok_or("certificate: expected closure is not callable")?;
-                        if crate::object::derived_signature(f)?
-                            != crate::object::derived_signature(other)?
-                        {
+                        if !compatible(f, other)? {
                             bail!("certificate: expected program signature incompatible (§12.1)")
                         }
                         let rhs = Space::new(&program(o, other, &args, b)?, other)?;
@@ -911,6 +1165,23 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                     }
                     match text(get(claim, "rule")?)? {
                         "adjoint_table" => {
+                            if let Some(owner) = nested_inverse_owner(o, f) {
+                                bail!(
+                                    "unimplemented: nested qinplace owner @{owner} proof/context replay; bennett-circuits-4pf (§12.3)"
+                                )
+                            }
+                            if !uniform_adjoint(o, f) {
+                                if invocation
+                                    == &obj([("args", strv("all")), ("budget", strv("all"))])
+                                {
+                                    bail!(
+                                        "unimplemented: parameter-uniform qinplace adjoint side conditions; bennett-circuits-4pf (§12.3)"
+                                    )
+                                }
+                                let (args, b) = resolve_invocation(o, f, invocation)?;
+                                program(o, f, &args, b)?;
+                            }
+
                             if get(claim, "witness")? != &obj([]) {
                                 bail!("certificate: adjoint witness must be empty (§12.1)")
                             }
@@ -949,6 +1220,11 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                 bail!(
                     "certificate: verification.oracle does not name a full relation proof (§12.3)"
                 )
+            }
+            let (args, b) = resolve_invocation(o, f, get(claim, "invocation")?)?;
+            let expected_rate = Space::new(&program(o, f, &args, b)?, f)?.fault_rate(f)?;
+            if get(verification, "fault_rate")? != &expected_rate {
+                bail!("certificate: computed full-domain fault histogram differs (§12.3)")
             }
         }
         if let Some(entries) = verification.get("inverse_pairs") {

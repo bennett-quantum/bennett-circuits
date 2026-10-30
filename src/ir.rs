@@ -42,6 +42,10 @@ impl MemBundle {
 pub enum WsKind {
     /// `qalloc`, `qcopy`/`qload` products, loop flags: start and end |0⟩.
     Clean,
+    /// Clean storage owned by the literal oracle's retained forward-step
+    /// history frame until prefix reversal (ISA §3.6/§5.2; draft §9.4 B5).
+    /// This is producer IR provenance, not an accepted ISA instruction.
+    RetainedHistory,
     /// `qborrow`: unknown entry state; the circuit must act as identity
     /// on it overall (§5.6). Export/simulation instantiate the pool in
     /// |0⟩ (matching `run-action`).

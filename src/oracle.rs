@@ -79,6 +79,7 @@ fn literal(s: &str, w: usize) -> Result<Word> {
 struct Build {
     c: Circuit,
     serial: u64,
+    retaining_history: bool,
     basis: Option<BTreeMap<QubitRef, bool>>,
 }
 impl Build {
@@ -94,7 +95,11 @@ impl Build {
         self.c.workspace.push(Workspace {
             name: name.clone(),
             width: w.try_into().expect("host limit: workspace width"),
-            kind: WsKind::Clean,
+            kind: if self.retaining_history {
+                WsKind::RetainedHistory
+            } else {
+                WsKind::Clean
+            },
             class: "any".into(),
         });
         refs(&name, w as u32)
@@ -1259,6 +1264,7 @@ fn specialise_impl(
     let mut b = Build {
         c,
         serial: 0,
+        retaining_history: false,
         basis,
     };
     let hashes = obj.identity()?;
@@ -1534,7 +1540,12 @@ fn specialise_impl(
         report_steps,
         probes: Vec::new(),
     };
+    // The literal construction owns every step allocation until its inverse
+    // prefix. Carry that frame provenance explicitly instead of inferring it
+    // later from generated names, one input state, or a gate ordinal catalog.
+    m.b.retaining_history = true;
     m.forward()?;
+    m.b.retaining_history = false;
     let forward = m.b.c.body.iter().filter(|node|!matches!(node,Node::Gate(g)if g.targets.iter().any(|q|m.probes.contains(&q.bundle)))).cloned().collect::<Vec<_>>();
     let halt = m.b.alloc(1, "commit_halt");
     m.b.equal_xor(&m.pc, m.rows.len(), &halt[0]);
