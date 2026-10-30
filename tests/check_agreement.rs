@@ -193,11 +193,20 @@ fn corrupted_objects_rejected_by_both() {
         assert_ne!(mutated, text, "{label}: mutation did not apply");
         let path = tmp.join("corrupt.bisa");
         std::fs::write(&path, &mutated).expect("write corrupt");
-        assert!(
-            ref_check(&path).is_err(),
-            "{label}: ref accepted corruption"
-        );
+        let reference = ref_check(&path).expect_err("reference accepted corruption");
         let ours = Object::parse(&mutated).and_then(|o| o.check());
-        assert!(ours.is_err(), "{label}: we accepted corruption: {ours:?}");
+        let ours = ours.expect_err("we accepted corruption");
+        let rule = reference
+            .split_once('§')
+            .expect("reference rule citation")
+            .1
+            .split(|c: char| !c.is_ascii_digit() && c != '.')
+            .next()
+            .unwrap()
+            .trim_end_matches('.');
+        assert!(
+            ours.0.contains(&format!("§{rule}")),
+            "{label}: ours={ours}; reference={reference}"
+        );
     }
 }

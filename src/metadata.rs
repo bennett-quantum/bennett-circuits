@@ -316,6 +316,11 @@ fn schedule(v: &Value) -> Result<()> {
                 if ![Some("reverse"), Some("recompute")].contains(&c["realisation"].as_str()) {
                     bail!("metadata: measurement-based cleanup is not admitted (§6.4; §9.1)");
                 }
+                if c["realisation"].as_str() == Some("recompute") {
+                    bail!(
+                        "unimplemented: §6.4 recompute eligibility and cleanup schedule matching (milestone 2)"
+                    );
+                }
             }
             "gate" => {
                 let g = fields(
@@ -875,6 +880,11 @@ fn certificate(v: &Value) -> Result<()> {
                     let e = fields(e, p, &["path", "realisation"], &["path", "realisation"])?;
                     if ![Some("reverse"), Some("recompute")].contains(&e["realisation"].as_str()) {
                         bail!("certificate: cleanup realisation invalid (§6.4; §9.1)");
+                    }
+                    if e["realisation"].as_str() == Some("recompute") {
+                        bail!(
+                            "unimplemented: §6.4 recompute eligibility and certificate cleanup matching (milestone 2)"
+                        );
                     }
                     array(&e["path"], p)?;
                 }

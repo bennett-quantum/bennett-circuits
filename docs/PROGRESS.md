@@ -421,3 +421,41 @@ No observed reference disagreement, so no deciding-spec divergence to report.
   workspace provenance, incoming expected-table/external-program/library
   replay, frame-descriptor schemas and inherited-context schedule auditing
   still have explicit M2 errors. No obligation is moved to M3.
+
+## Final verification checkpoint — 2026-10-30
+
+- **84 tests passed, 0 failed, 0 ignored** (`cargo test --offline --
+  --nocapture`); latest citation-only assertions separately rerun successfully.
+- `cargo fmt --check`, strict all-target Clippy, `git diff --check`: clean.
+- `check`: **96 agree / 0 diverge**, including every fixture/spec object and
+  all 42 conformance objects. Negative corpus and new rejection witnesses
+  compare the reference's rule citation, not just its exit status.
+- Actions: **19 / 930 tuples / 930 agree / 0 diverge**. Oracles: **59
+  occurrences / 488 tuples / 488 agree / 0 diverge**. No deciding-spec
+  disagreement to report. Small domains are exhaustive; wide tests retain
+  the explicitly labelled sampling limits documented above.
+- Published conformance: A **21/0/0**, B **35/0/0**, F **33/0/2**
+  (pass/fail/unavailable). A/B exit 0. F exits 2 because the unchanged
+  published harness has no frame-live-range or linking execution probe.
+- Further red-green §6.4 audit: recompute schedules/certificate cleanup
+  entries now fail with `unimplemented: §6.4 recompute eligibility and ...
+  matching (milestone 2)`. Previously the enum was accepted without proving
+  its eligibility or matching a cleanup point. Inherited-control auditing
+  remains explicitly staged as recorded above.
+
+Current rule coverage (an inventory, not a claim of a complete checker):
+
+| Rule | Implemented | Explicit M2 work remaining |
+|---|---|---|
+| §6.1 | Concrete gate/call provenance, cell-version windows, f64 symbolic histories, interface-only symbolic call contracts | General symbolic workspace/count/token transfer; opaque imported workspace effects |
+| §6.2 | Exact cleanup and quantum-use histories; non-permutation call barriers; direct-CFG matched cleanup | General action CFGs, overlapping cyclic invocations, interprocedural indirect cleanup |
+| §6.3 | Diagonal-use cleanup/T5 with quantum interference retained | General unsupported symbolic workspace cases reject before this proof |
+| §6.4 | Effective-control disjointness, exact inverse checks, rejection of measurement cleanup | Full inherited-context keys, recompute eligibility and schedule/certificate matching |
+| §5.6/§12 | Translation frames; bound exhaustive-current-program full-D factorisation | Expected-table/external-program/library/structural replay; imported inverse proofs |
+| §16/§9.1 | Recursive schemas, wide domains, canonical integers/UTF-16 JCS, subclaim DAG and signature contracts | Full final audit; frame descriptor schema remains explicit §9.4 M2 error |
+
+**Milestone 2 remains incomplete.** pk3 and pk3.2 stay in progress. Passing
+finite acceptance suites does not close the remaining general checker and
+certificate obligations. Next is completion of those M2 obligations, then
+M3 placement/scheduling. No pushes, Dolt remote sync, external repository
+writes, or reference implementation source imports.

@@ -453,6 +453,21 @@ fn new_cleanup_and_selector_witnesses_agree_with_reference() {
             String::from_utf8_lossy(&reference.stdout),
             String::from_utf8_lossy(&reference.stderr)
         );
+        if let Err(e) = &ours {
+            let diagnostic = String::from_utf8_lossy(&reference.stderr);
+            let rule = diagnostic
+                .split_once('§')
+                .expect("reference rule citation")
+                .1
+                .split(|c: char| !c.is_ascii_digit() && c != '.')
+                .next()
+                .unwrap()
+                .trim_end_matches('.');
+            assert!(
+                e.0.contains(&format!("§{rule}")),
+                "{label}: ours={e}; reference={diagnostic}"
+            );
+        }
     }
 }
 
@@ -667,6 +682,31 @@ fn symbolic_opaque_action_calls_use_the_full_interface_contract() {
     let e = o.hash().unwrap_err();
     assert!(
         e.0.contains("§3.3") && !e.0.contains("unimplemented"),
+        "{e}"
+    );
+}
+
+#[test]
+fn recompute_schedule_requires_an_implemented_eligibility_proof() {
+    let mut o=Object::parse(&std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/conformance/cases/objects/sched_inc8.bisa").unwrap()).unwrap();
+    let Value::Object(schedule) = o.schedule.as_mut().unwrap() else {
+        unreachable!()
+    };
+    let Value::Array(entries) = schedule.get_mut("entries").unwrap() else {
+        unreachable!()
+    };
+    let Value::Object(entry) = &mut entries[0] else {
+        unreachable!()
+    };
+    entry.remove("start");
+    entry.insert("kind".into(), Value::Str("cleanup".into()));
+    entry.insert(
+        "cleanup".into(),
+        Value::parse(r#"{"realisation":"recompute"}"#).unwrap(),
+    );
+    let e = o.hash().unwrap_err();
+    assert!(
+        e.0.contains("unimplemented: §6.4") && e.0.contains("milestone 2"),
         "{e}"
     );
 }

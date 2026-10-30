@@ -50,6 +50,17 @@ agreement does not claim a complete static checker.
 Harnesses: 19 actions / 930 basis comparisons and 59 oracle occurrences / 488
 basis comparisons, all agree. Small oracle interfaces (<=10 bits) are
 exhaustive; wider oracle interfaces use four explicit full-tuple patterns.
-These tests are evidence, not certificates. `scripts/run-conformance` runs
-Suite F using the published harness with all artifacts confined to this repo:
-33 pass, 0 fail, 2 unavailable (exit 2, not success).
+These tests are evidence, not certificates. `scripts/run-conformance` uses the published harness with all artifacts
+confined to this repo. Select `--suite A`, `--suite B`, or `--suite F` (default).
+Latest: A 21/0/0, B 35/0/0, F 33/0/2 (pass/fail/unavailable); F exits 2
+because its linking and frame-descriptor probes are unavailable.
+
+`run-cc <object> <entry> [--args ...] [--entropy hex] [--draws ...]
+[--replies file]` runs the independent CC/R diagnostic machine. `reverse`
+executes and reverses its recorded deltas, refusing measured runs. For oracle
+entries, `reverse` accepts `--input`, `--budget`, optional `--steps`, and the
+run-oracle arguments, and verifies compiled prefix restoration. `step-check`
+compares supported direct row semantics against the circuit on the exhaustive
+<=16-bit free input/memory domain. Unsupported direct rows and large-domain
+sampling fail explicitly. These diagnostic commands are not certificate
+claims; CC/R quantum diagnostic amplitudes use binary64 arithmetic.
