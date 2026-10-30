@@ -706,10 +706,14 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
     // Separate path states preserve correlations at joins; balanced loops
     // converge to the identical incoming state.
     type State = BTreeMap<usize, bool>; // call point -> invalidated read version
-    let mut work = vec![(0usize, State::new())];
+    // A label is an abstract index, not a guessed numeric address. Keep it
+    // path-sensitive along with pending invocations, so an indirect jump
+    // through a copied label does not invent paths back into its producer.
+    type Labels = BTreeMap<String, usize>;
+    let mut work = vec![(0usize, State::new(), Labels::new())];
     let mut seen = BTreeSet::new();
-    while let Some((pc, mut pending)) = work.pop() {
-        if pc >= rows.len() || !seen.insert((pc, pending.clone())) {
+    while let Some((pc, mut pending, mut values)) = work.pop() {
+        if pc >= rows.len() || !seen.insert((pc, pending.clone(), values.clone())) {
             continue;
         }
         let i = rows[pc];
@@ -755,6 +759,32 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
             };
             *dirty |= ins.iter().any(|n| written.contains(n)) || memory && !mems.is_empty();
         }
+        let read_label = |a: &Operand| match a {
+            Operand::Name(n) => values.get(n).copied(),
+            Operand::Label(n, _) => labels.get(n.as_str()).copied(),
+            _ => None,
+        };
+        let outputs = match i.opcode.as_str() {
+            "lift.label" | "lift.mov" => vec![read_label(&i.operands[0])],
+            "lift.parmov" => match &i.operands[0] {
+                Operand::List(ns) => ns.iter().map(|n| values.get(n).copied()).collect(),
+                _ => unreachable!(),
+            },
+            "lift.select" => {
+                let a = read_label(&i.operands[1]);
+                let b = read_label(&i.operands[2]);
+                vec![if a == b { a } else { None }]
+            }
+            _ => vec![None; i.lhs.len()],
+        };
+        for name in &written {
+            values.remove(name);
+        }
+        for (name, value) in i.lhs.iter().zip(outputs) {
+            if let Some(value) = value {
+                values.insert(name.clone(), value);
+            }
+        }
         if i.opcode == "lift.oracle_call" && pending.insert(pc, false).is_some() {
             bail!(
                 "unimplemented: §5.5 overlapping dynamic invocations at a cyclic call point (milestone 2)"
@@ -769,21 +799,20 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
                     }
                 }
             }
-            // Every locally addressable row is a possible indirect destination.
-            // Interprocedural indirect jumps need the containing index space.
+            // §4.2 bounds qjumpr to the containing function, even when its
+            // oracle index space also contains lprocs. Outside indices fault.
             "qjumpr" => {
-                if o.functions.iter().any(|cf| cf.kind == FnKind::Lproc) {
-                    bail!(
-                        "unimplemented: §5.5 interprocedural indirect-jump cleanup (milestone 2)"
-                    );
+                if let Some(destination) = values.get(opname(&i.operands[0])?) {
+                    successors.push(*destination);
+                } else {
+                    successors.extend(0..rows.len());
                 }
-                successors.extend(0..rows.len());
             }
             "lift.retval" | "lift.ret" | "fault" => {}
             _ => successors.push(pc + 1),
         }
         for next in successors {
-            work.push((next, pending.clone()));
+            work.push((next, pending.clone(), values.clone()));
         }
     }
     Ok(())

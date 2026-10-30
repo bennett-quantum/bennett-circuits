@@ -1,5 +1,19 @@
 # bennett-circuits — progress
 
+## 2026-10-30 — M2 indirect cleanup resume
+
+- Red-green label provenance now follows `lift.label`, `lift.mov`, parallel
+  moves and equal-arm selects through the matched-cleanup CFG. Indirect jumps
+  use a known destination when proved; unknown indices conservatively visit
+  every row of the containing function. The prior refusal whenever any lproc
+  existed was incorrect: §4.2 says "qjumpr to any other index faults, so
+  control never leaves a function except through lift.call/lift.ret."
+- A correctly hashed indirect-cleanup witness agrees with the reference CLI;
+  check agreement increases from 96 to **97 / 0 divergences**. All 30 static
+  checker tests pass, including the new unrelated-lproc regression.
+- This does not discharge overlapping cyclic invocations or general symbolic
+  workspace/certificate obligations. pk3 and pk3.2 remain in progress.
+
 Milestone 1 (brief `docs/briefs/2026-10-29-circuits-milestone-1.md`), beads
 epic `bennett-circuits-q93` (tasks `.1`–`.5`). ISA 0.8 via the published spec
 only; reference binary used solely through its CLI in tests.

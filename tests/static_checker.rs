@@ -118,6 +118,34 @@ fn matched_cleanup_requires_a_call_on_every_incoming_path() {
         "{e}"
     );
 }
+
+#[test]
+fn matched_cleanup_tracks_indirect_labels_with_unrelated_lprocs() {
+    let body = "lift.oracle_call @inc8 tk (x) r fr () ()\nidx = lift.label ^cleanup\nnext = lift.mov idx\nqjumpr next\n^cleanup():\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nlift.retval r";
+    let mut o = nested_object(body);
+    let f = o.functions.iter_mut().find(|f| f.name == "cancel").unwrap();
+    for name in ["idx", "next"] {
+        f.regs.push(bennett_circuits::object::RegDecl {
+            name: name.into(),
+            ty: bennett_circuits::object::Type::Reg(32),
+        });
+    }
+    let extra = generated("lproc @unused () (r:reg[8]) () () ()\n^entry():\nlift.ret r\n");
+    o.functions.extend(extra.functions);
+    let mut s = extra.symbols[0].clone();
+    s.index = o.symbols.len().to_string();
+    o.symbols.push(s);
+    let memory = Object::parse(&std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/tests/fixtures/sum_db.bisa").unwrap()).unwrap();
+    o.layout = memory.layout;
+    if let Some(Value::Object(layout)) = &mut o.layout {
+        layout.insert("globals".into(), Value::Object(Default::default()));
+        layout.insert(
+            "interface_regions".into(),
+            Value::Object(Default::default()),
+        );
+    }
+    o.hash().unwrap();
+}
 #[test]
 fn matched_cleanup_rejects_input_write_through_another_call() {
     let mut o = nested_object(
@@ -435,6 +463,10 @@ fn new_cleanup_and_selector_witnesses_agree_with_reference() {
         (
             "nonperm-call-window",
             "action @id (x:wire mut) () () () ()\n^entry():\ns x\ns x\ns x\ns x\naction @a (x:wire mut) () () () ()\n^entry():\nd = qcopy x\naction_call @id (x) () () ()\nquncopy x d\n",
+        ),
+        (
+            "indirect-matched-cleanup",
+            "oracle @id (x:wire in) (t:wire) (f:wire[4]) () ()\n^entry():\nlift.retval x\noracle @a (x:wire in) (t:wire) (f:wire[4]) () (tk:token)\nregs { r:reg[1], fr:reg[4], idx:reg[32], next:reg[32] }\n^entry():\nlift.oracle_call @id tk (x) r fr () ()\nidx = lift.label ^cleanup\nnext = lift.mov idx\nqjumpr next\n^cleanup():\nlift.oracle_uncall @id tk (x) r fr () ()\nlift.retval r\n",
         ),
     ] {
         let path = materialise(body, label);

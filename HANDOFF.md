@@ -3,6 +3,12 @@ infrastructure outage. No pushes, no external repository edits, reference CLI
 only. Do not close bennett-circuits-pk3 or bennett-circuits-pk3.2 until the
 remaining checker/certificate obligations below are actually implemented.
 
+Latest resume: label-aware indirect matched cleanup implemented red-green;
+`qjumpr` remains in its containing function by §4.2 even with lprocs in the
+index space. Known labels survive moves/parmov/equal-arm selects. Check CLI
+agreement is now 97/0; 30 static checker tests pass. Full gates to be rerun
+after further work. Other M2 gaps below remain open.
+
 Commits this session:
 - c0221b5: non-permutation call-window events, wide domains, imported quantum
   signatures for CC calls.
