@@ -4,8 +4,8 @@ The reference is used through its CLI only. Do not close bennett-circuits-pk3
 or bennett-circuits-pk3.2: the remaining obligations below are not completed.
 
 Latest commits: 521e42e (label-aware indirect cleanup), 0bfd28d (universal
-parameter-independent workspace sections), followed by the schema/library
-refusal and specialisation-bound audit commit. See docs/PROGRESS.md for the
+parameter-independent workspace sections), c8c8d0e (schema/library refusal
+and specialisation-bound audit). See docs/PROGRESS.md for the
 complete history, deciding sentences, counts and limitations.
 
 Verified gates: 94 tests passed / 0 failed / 0 ignored. Formatting, strict
