@@ -3,7 +3,7 @@
 mod exact;
 #[path = "support/sim.rs"]
 mod sim;
-#[path="support/target.rs"]
+#[path = "support/target.rs"]
 mod targets;
 use bennett_circuits::{
     object::Object,
@@ -482,7 +482,7 @@ fn oracle_placement_annotations_bind_budget_and_exact_target_hash() {
         "inc8",
         budget,
         &[],
-        &targets::universal(false,false),
+        &targets::universal(false, false),
     )
     .unwrap();
     let a = p.annotations().unwrap();
@@ -491,4 +491,58 @@ fn oracle_placement_annotations_bind_budget_and_exact_target_hash() {
         Some(&val(r#"["0","0","0","0"]"#))
     );
     assert!(a.get("obligations").unwrap().as_array().unwrap().len() >= 4);
+}
+
+#[test]
+fn nonterminating_rational_costs_remain_exact_in_annotations() {
+    let mut t = base_target();
+    let mut gs = t.get("gates").unwrap().as_array().unwrap().to_vec();
+    put(
+        &mut gs[0],
+        "cost",
+        val(r#"{"time":{"op":"/","args":[1,3]},"gates":1}"#),
+    );
+    put(&mut t, "gates", bennett_circuits::json::Value::Array(gs));
+    let o = make_object("perm_action @a (t:wire mut) () () () ()\n^entry():\nx t\n");
+    let p = place_on_target(&o, "a", &[], &Target::parse(&t.to_jcs()).unwrap()).unwrap();
+    assert_eq!(
+        p.resources["time"]
+            .checked_mul(Rational::integer(3))
+            .unwrap(),
+        Rational::ONE
+    );
+    assert_eq!(
+        p.annotations()
+            .unwrap()
+            .get("resources")
+            .unwrap()
+            .get("time")
+            .unwrap()
+            .as_str(),
+        Some("1/3")
+    );
+}
+
+#[test]
+fn native_qram_respects_predicate_capacity() {
+    let mut t = base_target();
+    let mut caps = t.get("capabilities").unwrap().clone();
+    put(&mut caps, "max_predicate_depth", val("0"));
+    put(&mut t, "capabilities", caps);
+    put(
+        &mut t,
+        "qram",
+        val(
+            r#"{"load":{"cost":{"time":1}},"store":{"cost":{"time":1}},"exch":{"cost":{"time":1}}}"#,
+        ),
+    );
+    let o = make_object(
+        "perm_action @a (t:wire mut) (a:wire in,p:wire in) (m:region[1,1] mut) () ()\n^entry():\nqpred p\nqstore m a t\nqunpred p\n",
+    );
+    assert!(
+        place_on_target(&o, "a", &[], &Target::parse(&t.to_jcs()).unwrap())
+            .unwrap_err()
+            .0
+            .contains("max_predicate_depth")
+    );
 }

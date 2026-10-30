@@ -124,6 +124,11 @@ impl Rational {
             .try_into()
             .map_err(|_| Error("§8.1 negative or oversized index/count".into()))
     }
+    /// Exact internal annotation text; fractions are not mislabelled as §12 decimals.
+    pub fn exact_text(self) -> String {
+        self.decimal()
+            .unwrap_or_else(|_| format!("{}/{}", self.numerator, self.denominator))
+    }
     pub fn decimal(self) -> Result<String> {
         let mut d = self.denominator;
         for p in [2, 5] {

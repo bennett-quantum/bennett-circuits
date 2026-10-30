@@ -317,6 +317,18 @@ fn place_target_program(
     let mut i = 0;
     while i < n {
         let g = &placement.flat.gates[i];
+        let depth = g
+            .controls
+            .len()
+            .checked_sub(contexts.own[i])
+            .ok_or("placement: own controls exceed total")?;
+        if crate::target::field(caps, "max_predicate_depth")?
+            .as_u64()
+            .is_some_and(|max| depth as u64 > max)
+        {
+            bail!("§8.3 max_predicate_depth exceeded");
+        }
+
         let qram = if !crate::target::field(&target.document, "qram")?.is_null() {
             contexts.memory.iter().find(|m| m.start == i)
         } else {
@@ -359,17 +371,6 @@ fn place_target_program(
             clock = end;
             i = m.end;
             continue;
-        }
-        let depth = g
-            .controls
-            .len()
-            .checked_sub(contexts.own[i])
-            .ok_or("placement: own controls exceed total")?;
-        if crate::target::field(caps, "max_predicate_depth")?
-            .as_u64()
-            .is_some_and(|max| depth as u64 > max)
-        {
-            bail!("§8.3 max_predicate_depth exceeded");
         }
         let expanded = target.expand(g, contexts.own[i], &mut classes, Rational::ZERO)?;
         if !expanded.ancillae.is_empty() {
@@ -634,7 +635,7 @@ impl Placed {
         let resources = self
             .resources
             .iter()
-            .map(|(n, r)| Ok((n.clone(), s(r.decimal()?))))
+            .map(|(n, r)| Ok((n.clone(), s(r.exact_text()))))
             .collect::<Result<BTreeMap<_, _>>>()?;
         let per = self
             .per_class
@@ -644,7 +645,7 @@ impl Placed {
                     n.clone(),
                     Value::Object(
                         cs.iter()
-                            .map(|(c, r)| Ok((c.clone(), s(r.decimal()?))))
+                            .map(|(c, r)| Ok((c.clone(), s(r.exact_text()))))
                             .collect::<Result<_>>()?,
                     ),
                 ))
@@ -690,8 +691,8 @@ impl Placed {
                         .map(|e| {
                             Ok(Value::Object(BTreeMap::from([
                                 ("source_gate".into(), Value::Int(e.source_gate.to_string())),
-                                ("start".into(), s(e.start.decimal()?)),
-                                ("end".into(), s(e.end.decimal()?)),
+                                ("start".into(), s(e.start.exact_text())),
+                                ("end".into(), s(e.end.exact_text())),
                                 (
                                     "op".into(),
                                     s(e.leaf.as_ref().map_or_else(
@@ -720,8 +721,8 @@ impl Placed {
                             Ok(Value::Object(BTreeMap::from([
                                 ("wire".into(), Value::Int(w.wire.to_string())),
                                 ("class".into(), s(&w.class)),
-                                ("start".into(), s(w.start.decimal()?)),
-                                ("end".into(), s(w.end.decimal()?)),
+                                ("start".into(), s(w.start.exact_text())),
+                                ("end".into(), s(w.end.exact_text())),
                                 ("dirty".into(), Value::Bool(w.dirty)),
                             ])))
                         })

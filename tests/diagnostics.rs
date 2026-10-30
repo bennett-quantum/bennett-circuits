@@ -17,6 +17,15 @@ fn suite_a_execution_and_reversal() {
     acceptance("A", |_| true);
 }
 #[test]
+fn suite_c_action_reversal_and_subbyte_memory() {
+    acceptance("C", |c| {
+        matches!(
+            c.get("id").and_then(Value::as_str),
+            Some("C-action-reverse-adjoint" | "C-qmem-exchange")
+        )
+    });
+}
+#[test]
 fn suite_h_expansion_refusal() {
     acceptance("H", |c| c.get("command").is_some());
 }

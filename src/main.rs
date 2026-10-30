@@ -392,7 +392,13 @@ fn run_basis(args: &[String]) -> Result<()> {
                     {
                         return Err(Error("run-action: memory width mismatch".into()));
                     }
-                    bits.extend(data);
+                    let stride = (m.cell_width as usize).div_ceil(8) * 8;
+                    for cell in data.chunks(stride) {
+                        if cell[m.cell_width as usize..].iter().any(|b| *b) {
+                            return Err(Error("run-action: memory cell padding is nonzero".into()));
+                        }
+                        bits.extend_from_slice(&cell[..m.cell_width as usize]);
+                    }
                 } else {
                     bits.resize(bits.len() + m.width() as usize, false);
                 }

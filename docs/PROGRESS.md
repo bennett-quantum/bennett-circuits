@@ -1,5 +1,49 @@
 # bennett-circuits — progress
 
+## 2026-10-30 — M3 target/scheduling-default acceptance
+
+Commits fe8f37f and 4025a21 implement target placement; final verification commit
+follows. The available accepted-0.8 mechanics are implemented, but **1ud remains
+open on publication dependencies**, not marked complete by corpus agreement.
+
+- Exact target JCS/hash and rational ASTs; own/effective controls, class/epsilon
+  matching, non-nesting schemes and concrete `any` assignment with peak capacity.
+- Native QRAM costs charged once, otherwise explicit logical dispatch; sequential
+  native-leaf events, makespan, counts, class occupancy/peak and dirty-rate charge.
+  Zero-time gates still require capacity. Scheme clean/dirty ancilla frames reuse
+  only disjoint lifetimes; arbitrary dirty inputs are tested.
+- Action and fixed-budget oracle placement; annotated executable QASM retains
+  source hierarchy/certificate, object/closure/target hashes, actual parameters
+  and budget, mapping, timing and every source proof obligation. Internal rational
+  annotation strings may be fractions (e.g. `1/3`), never rounded or mislabelled
+  as ISA §12 resource decimals. Metadata is `bc-ir-2` for own control counts.
+- `check-target`, `place`, `place-qasm`, exact non-permutation `run-action`, action
+  adjoint reversal and one-shot `run-program` diagnostics. Every embedded schedule
+  execution path refuses before launchability with §11/E_SCHEDULE_INFEASIBLE and
+  **b-isa-spec-8r4**; no generated ordinals/library bytes were fabricated.
+
+Verification: **128 unique Rust tests passed**, 0 failed/ignored across the full
+126-test run and final 127-test companion run (the already executed large oracle
+case is the single filter in the companion run; the new C diagnostic and native-QRAM predicate-limit regression are added).
+Action differential: **19 actions / 930 tuples**, each of reuse, native, scheme
+and QRAM placement agrees exactly with unplaced execution; all 930 reference CLI
+comparisons agree. Oracle differential: **59 occurrences / 488 tuples**, placed
+and unplaced agree and all reference CLI comparisons agree. Wide oracle domains
+retain the documented four-pattern evidence; no sampling is called proof.
+Fixture-only placement independently remains **13 / 740**; focused scheme, dirty
+and QRAM full-domain witnesses also pass. Check agreement remains **111/111**.
+Fmt, strict all-target Clippy and diff checks are recorded in .tmp final logs.
+
+Publication boundaries: frame/idle-pool interchange **4fa**, expansion library and
+all bound schedule identities/choices **b-isa-spec-8r4** (plus **yz8**), topology/
+routing schema **b4k**, undefined table index **v44**. b4k/v44 were filed here with
+`isa-0.9` and exact sentences; their unsupported paths refuse by bead. Placement
+requests are exact; explicit nonzero scheduled realisations need the library and
+M4 numerical/channel claims. M4 new certificates and M5 QIR/Quil remain staged.
+The five M2 decision beads remain open unchanged. Broader C direct diagnostic
+acceptance is tracked separately by **fgx**; it does not weaken circuit semantics.
+
+
 ## 2026-10-30 — M3 first placement slice
 
 - `placement::place_action` requires object validation before reuse and
@@ -622,3 +666,20 @@ but §8.3 publishes no connectivity/topology/routing schema. The default is
 all-to-all; topology inputs refuse by bead. Supplied schedules still refuse
 with **b-isa-spec-8r4**, never invented generated ordinals. Further target
 coverage, full differentials, quality gates and final counts follow.
+
+### Final published conformance accounting — M3
+
+Read-only harness/cases, pass/fail/unavailable: **A21/0/0 B35/0/0 C337/2/0
+D7/0/6 E0/0/16 F33/0/2 G10/0/14 H0/0/10**. A/B exit 0, C exits 1,
+D/E/F/G/H exit 2 for counted unavailable cases. The external corpus now has
+493 cases; its new staged entries account for D13/E16/G24 rather than the
+older 12/15/23. No published expectation or case was edited.
+
+Every placement/reference differential agrees. The two remaining broader C
+CLI divergences are explicit under **fgx**: C-step-check-sumdb-fixed-db lacks
+the fixed-region/exhaustive option surface; deciding §14.1: “Executes an
+oracle's reference body per basis configuration”. C-step-check-wide-fault
+lacks direct diagnostic literals wider than u128; deciding §5.2: “fr final =
+initial ⊕ code(F_B(x))”. Both report `unimplemented: … (milestone 6)`;
+the circuit builder/placed oracle harness already handles wide fault values.
+These failures are reported, not converted into passes or unavailable cases.
