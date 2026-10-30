@@ -215,6 +215,57 @@ fn versioned(v: &Value, path: &str) -> Result<()> {
     string(&m["version"], path)?;
     Ok(())
 }
+fn context_key(key: &str, p: &str) -> Result<()> {
+    let Some((variant, controls)) = key.split_once(':') else {
+        return Err(error(p, "context key requires variant:inherited_controls"));
+    };
+    choice(
+        &Value::Str(variant.into()),
+        p,
+        &["forward", "adjoint", "controlled"],
+    )?;
+    if controls.parse::<u128>().is_err()
+        || controls != "0" && controls.starts_with('0')
+        || !controls.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(error(
+            p,
+            "context control count must be a canonical natural",
+        ));
+    }
+    Ok(())
+}
+fn point_path(v: &Value, p: &str) -> Result<()> {
+    for point in array(v, p)? {
+        let point = fields(
+            point,
+            p,
+            &["symbol", "point", "iteration"],
+            &["symbol", "point", "iteration"],
+        )?;
+        hash(&point["symbol"], p)?;
+        let id = string(&point["point"], p)?;
+        let (block, ordinal) = id
+            .rsplit_once(':')
+            .ok_or_else(|| error(p, "invalid program point"))?;
+        if block.is_empty()
+            || !block.bytes().enumerate().all(|(i, b)| {
+                b.is_ascii_alphabetic() || b == b'_' || i > 0 && (b.is_ascii_digit() || b == b'.')
+            })
+            || ordinal.parse::<u64>().is_err()
+            || !ordinal.bytes().all(|b| b.is_ascii_digit())
+            || ordinal != "0" && ordinal.starts_with('0')
+        {
+            return Err(error(p, "invalid program point"));
+        }
+        if point["iteration"].as_str() != Some("*") {
+            for n in array(&point["iteration"], p)? {
+                natural(n, p)?;
+            }
+        }
+    }
+    Ok(())
+}
 fn schedule(v: &Value) -> Result<()> {
     let p = "schedule";
     let m = fields(v, p, &["bindings", "entries"], &["bindings", "entries"])?;
@@ -273,27 +324,7 @@ fn schedule(v: &Value) -> Result<()> {
             ],
             &["path", "step", "phase", "generated", "kind"],
         )?;
-        for point in array(&e["path"], p)? {
-            let point = fields(
-                point,
-                p,
-                &["symbol", "point", "iteration"],
-                &["symbol", "point", "iteration"],
-            )?;
-            hash(&point["symbol"], p)?;
-            let id = string(&point["point"], p)?;
-            let (_, ordinal) = id
-                .rsplit_once(':')
-                .ok_or_else(|| error(p, "invalid program point"))?;
-            if ordinal.parse::<u64>().is_err() {
-                return Err(error(p, "invalid point ordinal"));
-            }
-            if point["iteration"].as_str() != Some("*") {
-                for n in array(&point["iteration"], p)? {
-                    natural(n, p)?;
-                }
-            }
-        }
+        point_path(&e["path"], p)?;
         for k in ["step", "generated"] {
             if e[k].as_str() != Some("*") {
                 natural(&e[k], p)?;
@@ -318,7 +349,7 @@ fn schedule(v: &Value) -> Result<()> {
                 }
                 if c["realisation"].as_str() == Some("recompute") {
                     bail!(
-                        "unimplemented: §6.4 recompute eligibility and cleanup schedule matching (milestone 2)"
+                        "unimplemented: §6.4 recompute eligibility and cleanup schedule matching; requires unpublished expansion library b-isa-spec-8r4 (milestone 2)"
                     );
                 }
             }
@@ -875,7 +906,8 @@ fn certificate(v: &Value) -> Result<()> {
             }
         }
         if let Some(v) = r.get("cleanup") {
-            for v in map(v, p)?.values() {
+            for (key, v) in map(v, p)? {
+                context_key(key, p)?;
                 for e in array(v, p)? {
                     let e = fields(e, p, &["path", "realisation"], &["path", "realisation"])?;
                     if ![Some("reverse"), Some("recompute")].contains(&e["realisation"].as_str()) {
@@ -883,15 +915,16 @@ fn certificate(v: &Value) -> Result<()> {
                     }
                     if e["realisation"].as_str() == Some("recompute") {
                         bail!(
-                            "unimplemented: §6.4 recompute eligibility and certificate cleanup matching (milestone 2)"
+                            "unimplemented: §6.4 recompute eligibility and certificate cleanup matching; requires unpublished expansion library b-isa-spec-8r4 (milestone 2)"
                         );
                     }
-                    array(&e["path"], p)?;
+                    point_path(&e["path"], p)?;
                 }
             }
         }
         if let Some(v) = r.get("error") {
-            for v in map(v, p)?.values() {
+            for (key, v) in map(v, p)? {
+                context_key(key, p)?;
                 let e = fields(v, p, &["local", "inclusive"], &["local", "inclusive"])?;
                 for v in e.values() {
                     for n in fields(v, p, &["operator_norm", "diamond"], &[])?.values() {
@@ -916,7 +949,15 @@ fn certificate(v: &Value) -> Result<()> {
         &["multiplicities", "epsilon_total", "method"],
     )?;
     choice(&comp["method"], p, &["sum_over_multiplicities"])?;
-    for v in map(&comp["multiplicities"], p)?.values() {
+    for (key, v) in map(&comp["multiplicities"], p)? {
+        let (region, context) = key.split_once(':').ok_or_else(|| {
+            error(
+                p,
+                "multiplicity key requires hash:variant:inherited_controls",
+            )
+        })?;
+        hash(&Value::Str(region.into()), p)?;
+        context_key(context, p)?;
         natural(v, p)?;
     }
     for v in fields(&comp["epsilon_total"], p, &["diamond"], &["diamond"])?.values() {
@@ -928,6 +969,46 @@ fn certificate(v: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn certificate_with_region(region: &str, multiplicities: &str) -> Value {
+        let h = "0".repeat(64);
+        Value::parse(&format!(r#"{{"versions":{{"cert":"0.8"}},"bindings":{{"object_hash":"{h}","interface_hash":"{h}","closure_hash":"{h}"}},"producer":{{"name":"test","version":"1","materialisation":{{"llvm_version":"none","pipeline":[],"normaliser_version":"1"}}}},"regions":{{"{h}":{region}}},"composition":{{"method":"sum_over_multiplicities","multiplicities":{multiplicities},"epsilon_total":{{"diamond":0}}}}}}"#)).unwrap()
+    }
+    #[test]
+    fn certificate_context_keys_and_cleanup_paths_are_recursive_schemas() {
+        certificate(&certificate_with_region(
+            r#"{"claims":[],"verification":{},"cleanup":{"forward:0":[]}}"#,
+            "{}",
+        ))
+        .unwrap();
+        for region in [
+            r#"{"claims":[],"verification":{},"cleanup":{"forward":[]}}"#,
+            r#"{"claims":[],"verification":{},"cleanup":{"forward:-1":[]}}"#,
+            r#"{"claims":[],"verification":{},"cleanup":{"forward:01":[]}}"#,
+            r#"{"claims":[],"verification":{},"cleanup":{"sideways:1":[]}}"#,
+            r#"{"claims":[],"verification":{},"cleanup":{"forward:0":[{"path":[0],"realisation":"reverse"}]}}"#,
+            r#"{"claims":[],"verification":{},"error":{"forward":{"local":{},"inclusive":{}}}}"#,
+        ] {
+            assert!(
+                certificate(&certificate_with_region(region, "{}")).is_err(),
+                "{region}"
+            );
+        }
+        for key in [
+            "garbage",
+            &format!("{}:forward", "0".repeat(64)),
+            &format!("{}:forward:-1", "0".repeat(64)),
+        ] {
+            let multiplicities = format!(r#"{{"{key}":1}}"#);
+            assert!(
+                certificate(&certificate_with_region(
+                    r#"{"claims":[],"verification":{}}"#,
+                    &multiplicities
+                ))
+                .is_err(),
+                "{key}"
+            );
+        }
+    }
     #[test]
     fn domain_integers_are_not_limited_to_host_words() {
         let hi = "231584178474632390847141970017375815706539969331281128078915168015826259279871";

@@ -935,7 +935,7 @@ fn abstract_action(o: &Object, f: &Function, p: &Program) -> Result<()> {
                 .any(|n| matches!(n,Node::Call{controls,..}if !controls.is_empty())))
     {
         bail!(
-            "unimplemented: §6.4 inherited-control cleanup schedule key validation (milestone 2)"
+            "unimplemented: §6.4 inherited-control cleanup schedule key validation; generated-operation matching requires unpublished expansion library b-isa-spec-8r4 (milestone 2)"
         );
     }
     validate_pairs(p)?;
@@ -1324,6 +1324,13 @@ pub fn validate(o: &Object) -> Result<()> {
             bail!("checker: memory slots in memoryless object (§7.2)")
         }
         if f.is_action() {
+            for i in all(f) {
+                if i.opcode == "qloop" && !matches!(i.operands.first(), Some(Operand::Int(_))) {
+                    bail!(
+                        "unimplemented: §16.1/§5.3 symbolic trip-count object validation (milestone 2)"
+                    );
+                }
+            }
             action_readonly(o, f)?;
             crate::selectors::validate(o, f)?;
             if !f.groups[3].is_empty() {

@@ -58,6 +58,18 @@ fn classical_counts_angles_and_call_arguments_specialise() {
         assert_eq!(sim::basis(&flat, bits)[bits].value(), (1.0, 0.0));
     }
 }
+
+#[test]
+fn specialised_trip_counts_must_equal_the_identity_bounds() {
+    let o = parsed(
+        "perm_action @a (t:wire mut) () () (n:i8) ()\nregs {  } bounds {3}\n^entry():\nqloop n {\nx t\n}\n",
+    );
+    lower_program_with_args(&o, "a", &[Argument::Integer("3".into())]).unwrap();
+    for n in ["0", "2", "4"] {
+        let e = lower_program_with_args(&o, "a", &[Argument::Integer(n.into())]).unwrap_err();
+        assert!(e.0.contains("§5.3"), "{n}: {e}");
+    }
+}
 #[test]
 fn controlled_adjoint_oracle_calls_include_cleanup_gates() {
     let o = parsed(

@@ -417,6 +417,49 @@ impl<'a> FnLower<'a> {
             }
         }
         substitute(&mut instrs, &self.arguments);
+        // Literal bounds are checked by Object::check. A symbolic trip count
+        // is resolved only here, so compare it to the same text-order bound
+        // before unrolling (including nested and zero-trip bodies).
+        fn specialised_bounds(
+            original: &[Instr],
+            resolved: &[Instr],
+            bounds: &[u64],
+            ordinal: &mut usize,
+            args: &BTreeMap<String, Argument>,
+            name: &str,
+        ) -> Result<()> {
+            for (before, after) in original.iter().zip(resolved) {
+                if before.opcode == "qloop" {
+                    if let Some(Operand::Name(n)) = before.operands.first()
+                        && args.contains_key(n)
+                    {
+                        let count = after
+                            .operands
+                            .first()
+                            .ok_or_else(|| Error("lower: qloop arity (§4.6)".into()))?;
+                        let count = int_literal(count, "qloop", name)?;
+                        if bounds.get(*ordinal) != Some(&count) {
+                            bail!(
+                                "lower: @{name} specialised loop {ordinal} count {count} differs from declared bounds (§5.3)"
+                            );
+                        }
+                    }
+                    *ordinal += 1;
+                }
+                for (a, b) in before.children.iter().zip(&after.children) {
+                    specialised_bounds(a, b, bounds, ordinal, args, name)?;
+                }
+            }
+            Ok(())
+        }
+        specialised_bounds(
+            &self.f.blocks[0].instrs,
+            &instrs,
+            &self.f.bounds,
+            &mut 0,
+            &self.arguments,
+            &self.f.name,
+        )?;
         self.declare_regions(&instrs)?;
         self.lower_seq(&instrs, false)
     }

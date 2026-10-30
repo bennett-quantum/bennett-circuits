@@ -1,5 +1,51 @@
 # bennett-circuits — progress
 
+## 2026-10-30 — latest M2 verification (after 0bfd28d)
+
+**M2 remains incomplete; pk3 and pk3.2 remain in progress. M3 unstarted.**
+
+- Red-green §12.3 schema audit now validates `variant:inherited_controls`
+  cleanup/error keys, hash-prefixed composition multiplicity keys, and every
+  nested cleanup invocation-path element. Schedule and certificate paths use
+  the same schema. This is schema validation, not a claim that generated
+  operation matching or inherited-context coverage has been implemented.
+- Red-green specialisation now compares each resolved symbolic loop count
+  against its identity-bound text-order count before unrolling, recursively
+  including zero-trip bodies. The raw lowering API still specialises counts.
+  Serialized `qloop n` (a parameter name) is explicitly unimplemented under
+  §16.1/§5.3; the CLI witness agrees with the reference's §16.1 rejection.
+  Deciding constraints: §4.8 lists "wires, bundles, regions, literals" for
+  this family, and §5.3 says the bounds list "MUST equal the body".
+  An attempted accepting checker path was removed after this audit; no
+  reference error is alleged and no expected semantic result was weakened.
+- Recompute schedule/certificate matching, inherited-control generated-operation
+  matching and inverse-pair-library borrow replay retain explicit M2 errors
+  naming **b-isa-spec-8r4**. The `ref` library is unpublished until 0.9;
+  no placeholder ordinals, hash or certificate are accepted as an implementation.
+- Final gates: **94 passed / 0 failed / 0 ignored**, formatting, strict
+  all-target Clippy and `git diff --check` clean. Logs:
+  `.tmp/m2-resume-final-tests.log`, `.tmp/m2-resume-final-{A,B,F}.log`.
+- Check: **101 comparisons agree / 0 diverge**, including all fixture/spec
+  and conformance objects, negative rule citations, and 5 added CLI witnesses
+  beyond the 96-comparison checkpoint. Categories include repeated contents.
+  Differential: **19 actions / 930 tuples / 930 agree / 0 diverge**;
+  **59 oracle occurrences / 488 tuples / 488 agree / 0 diverge**.
+  Existing wide-domain sampling limits remain unchanged.
+- Conformance (pass/fail/unavailable): **A 21/0/0; B 35/0/0; F 33/0/2**.
+  A/B exit 0; F exits 2 because frame-live-range and link-conflict probes
+  are absent from the unchanged published harness. No unresolved reference
+  disagreement or deciding-sentence divergence remains.
+
+Remaining M2 obligations are still explicit: general symbolic workspace
+histories across calls/control structure and multi-block actions, overlapping
+dynamic invocations at cyclic call sites, arbitrary opaque imported workspace
+effects, expected-table/external-program/structural certificate replay,
+imported inverse proofs, frame descriptors, full inherited-context cleanup
+coverage and recompute eligibility/matching. Label-aware local indirect jumps
+are now implemented; §4.2 forbids cross-function qjumpr, so an unrelated
+lproc is no longer itself an indirect-cleanup blocker. None of these remaining
+obligations has been moved to M3. No pushes or external repository edits.
+
 ## 2026-10-30 — M2 indirect cleanup resume
 
 - Red-green label provenance now follows `lift.label`, `lift.mov`, parallel

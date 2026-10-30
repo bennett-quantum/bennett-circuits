@@ -480,6 +480,10 @@ fn new_cleanup_and_selector_witnesses_agree_with_reference() {
             "symbolic-call-workspace-sections",
             "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\nd = qcopy x\ns d\nquncopy x d\noracle_call @o tk (x) t fr () ()\ne = qcopy t\ns e\nquncopy t e\n",
         ),
+        (
+            "symbolic-count-clean-workspace",
+            "action @a (t:wire mut) () () (n:i8) ()\nregs {  } bounds {3}\n^entry():\nqloop n {\nd = qcopy t\ns d\nquncopy t d\n}\n",
+        ),
     ] {
         let path = materialise(body, label);
         let ours = Object::parse(&std::fs::read_to_string(&path).unwrap()).and_then(|o| o.check());
@@ -733,6 +737,16 @@ fn symbolic_workspace_is_proved_without_instantiating_unused_parameters() {
 }
 
 #[test]
+fn serialized_symbolic_counts_keep_an_explicit_cited_refusal() {
+    let body = "action @a (t:wire mut) () () (n:i8) ()\nregs {  } bounds {3}\n^entry():\nqloop n {\nd = qcopy t\ns d\nquncopy t d\n}\n";
+    let e = generated(body).hash().unwrap_err();
+    assert!(
+        e.0.contains("unimplemented: §16.1") && e.0.contains("milestone 2"),
+        "{e}"
+    );
+}
+
+#[test]
 fn symbolic_interface_calls_compose_with_independent_workspace_sections() {
     let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\n";
     let body = format!(
@@ -814,6 +828,32 @@ fn recompute_schedule_requires_an_implemented_eligibility_proof() {
     let e = o.hash().unwrap_err();
     assert!(
         e.0.contains("unimplemented: §6.4") && e.0.contains("milestone 2"),
+        "{e}"
+    );
+    assert!(e.0.contains("b-isa-spec-8r4"), "{e}");
+}
+
+#[test]
+fn inverse_library_borrow_claim_names_the_unpublished_contract_blocker() {
+    let mut o = generated(
+        "perm_action @a (t:wire mut) () () () ()\n^entry():\nb = qborrow any 1\nswap b t\nswap b t\nqreturn b\n",
+    );
+    with_borrow_certificate(&mut o, false, false);
+    let Value::Object(cert) = o.certificate.as_mut().unwrap() else {
+        panic!()
+    };
+    let Value::Object(regions) = cert.get_mut("regions").unwrap() else {
+        panic!()
+    };
+    let Value::Object(region) = regions.values_mut().next().unwrap() else {
+        panic!()
+    };
+    region.insert("claims".into(), Value::parse(&format!(r#"[{{"kind":"structural","rule":"inverse_pair_library","subclaims":[],"witness":{{"library_closure_hash":"{}","claim_index":0}}}}]"#, "0".repeat(64))).unwrap());
+    let e = o.hash().unwrap_err();
+    assert!(
+        e.0.contains("unimplemented: §12")
+            && e.0.contains("b-isa-spec-8r4")
+            && e.0.contains("milestone 2"),
         "{e}"
     );
 }

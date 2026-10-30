@@ -197,6 +197,11 @@ pub(crate) fn verify(
                 return Err(error("sampled borrow evidence is not a full-D T3 proof"));
             }
             Some("structural") => {
+                if claim.get("rule").and_then(Value::as_str) == Some("inverse_pair_library") {
+                    bail!(
+                        "unimplemented: §12 borrow inverse-pair library replay; unpublished reference library b-isa-spec-8r4 (milestone 2)"
+                    )
+                }
                 bail!("unimplemented: §12 borrow library/structural claim replay (milestone 2)")
             }
             _ => return Err(error("borrow verification must reference a T3 proof")),
