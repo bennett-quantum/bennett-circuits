@@ -48,7 +48,7 @@ impl<'a> Lowerer<'a> {
         let Some(f) = self.obj.function(name) else {
             if self.obj.imports.iter().any(|i| i.name == name) {
                 bail!(
-                    "unimplemented: lowering imported action @{name} without a body (milestone 2)"
+                    "unimplemented: lowering imported action @{name} without a body; decision bennett-circuits-z9r (milestone 2)"
                 );
             }
             bail!("lower: unknown action @{name}");
@@ -125,7 +125,7 @@ impl<'a> FnLower<'a> {
             .collect::<Result<BTreeMap<_, _>>>()?;
         if f.blocks.len() != 1 || !f.blocks[0].params.is_empty() {
             bail!(
-                "unimplemented: multi-block action @{} (milestone 2); Q actions lower from one structured block",
+                "unimplemented: multi-block action @{}; decision bennett-circuits-7bu (milestone 2); Q actions lower from one structured block",
                 f.name
             );
         }
@@ -1115,6 +1115,11 @@ impl<'a> FnLower<'a> {
                 let (muts, ins, mems, cargs) = (&lists[0], &lists[1], &lists[2], &lists[3]);
 
                 let Some(cf) = self.obj.function(&callee) else {
+                    if self.obj.imports.iter().any(|i| i.name == callee) {
+                        bail!(
+                            "unimplemented: imported action @{callee} workspace effects; decision bennett-circuits-z9r (milestone 2)"
+                        );
+                    }
                     bail!("lower: @{} calls unknown action @{callee}", self.f.name);
                 };
                 if !cf.is_action() {
@@ -1302,7 +1307,7 @@ impl FnLower<'_> {
         };
         let cf = self.obj.function(name).ok_or_else(|| {
             Error(format!(
-                "unimplemented: imported oracle @{name} (milestone 2)"
+                "unimplemented: imported oracle @{name}; decision bennett-circuits-z9r (milestone 2)"
             ))
         })?;
         let Operand::List(ins) = &ops[2] else {

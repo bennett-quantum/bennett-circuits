@@ -239,7 +239,7 @@ pub fn inverse_pair(obj: &Object, g: &str, ginv: &str, budget: Budget) -> Result
             .and_then(|h| h.closure_hash.clone())
             .ok_or_else(|| {
                 Error(format!(
-                    "unimplemented: qinplace unresolved closure @{name} (milestone 2)"
+                    "unimplemented: qinplace unresolved closure @{name}; decision bennett-circuits-4pf (milestone 2)"
                 ))
             })
     };
