@@ -186,6 +186,8 @@ pub struct DataEntry {
 #[derive(Debug, Clone)]
 pub struct Object {
     text: String,
+    /// Loud opt-in to draft §9.4/§12 interchange, independent of the 0.8 ISA.
+    pub draft_encodings: bool,
     pub header: Header,
     pub symbols: Vec<Symbol>,
     pub imports: Vec<Import>,
@@ -212,9 +214,17 @@ pub struct CheckReport {
     pub status: String,
     pub symbols: BTreeMap<String, SymbolHashes>,
     pub unresolved_imports: Vec<String>,
+    pub proof_status: String,
+    pub pending_obligations: Vec<crate::history::PendingObligation>,
 }
 
 impl Object {
+    /// Explicit acceptance of ISA 0.9-draft §9.4 and §12 metadata on 0.8 code.
+    pub fn parse_draft(text: &str) -> Result<Object> {
+        let mut o = Self::parse(text)?;
+        o.draft_encodings = true;
+        Ok(o)
+    }
     pub fn function(&self, name: &str) -> Option<&Function> {
         self.functions.iter().find(|f| f.name == name)
     }
@@ -312,6 +322,7 @@ impl Object {
         }
         Ok(Object {
             text: text.to_string(),
+            draft_encodings: false,
             header,
             symbols,
             imports,
@@ -1763,11 +1774,101 @@ impl Object {
         sha256_hex(text.as_bytes())
     }
 
+    /// Rebuild the canonical object after linking or attaching proof metadata.
+    /// Recompute all stored interface hashes; semantic checks remain separate.
+    pub fn materialize(&self) -> Result<Self> {
+        let hashes = self.identity()?;
+        let mut out = format!(
+            "bennett-object isa={} object={} launch={} sched={} cert={} coverage={} target={} ptr_width={}\n",
+            self.header.isa,
+            self.header.object,
+            self.header.launch,
+            self.header.sched,
+            self.header.cert,
+            self.header.coverage,
+            self.header.target,
+            self.header.ptr_width
+        );
+        let symbols = Value::Object(
+            self.symbols
+                .iter()
+                .map(|s| {
+                    (
+                        s.index.clone(),
+                        jobj(vec![
+                            ("name", Value::Str(s.name.clone())),
+                            ("kind", Value::Str(s.kind.clone())),
+                            ("signature", s.signature.clone()),
+                            (
+                                "interface_hash",
+                                Value::Str(hashes[&s.name].interface_hash.clone()),
+                            ),
+                        ]),
+                    )
+                })
+                .collect(),
+        );
+        out.push_str(&format!("\nsection symbols\n{}\n", symbols.to_jcs()));
+        if !self.imports.is_empty() {
+            let imports = Value::Object(
+                self.imports
+                    .iter()
+                    .map(|i| {
+                        let mut m = BTreeMap::from([("signature".into(), i.signature.clone())]);
+                        if let Some(h) = &i.pinned_closure_hash {
+                            m.insert("pinned_closure_hash".into(), Value::Str(h.clone()));
+                        }
+                        (i.name.clone(), Value::Object(m))
+                    })
+                    .collect(),
+            );
+            out.push_str(&format!("\nsection imports\n{}\n", imports.to_jcs()));
+        }
+        if !self.functions.is_empty() {
+            out.push_str("\nsection functions\n");
+            for f in &self.functions {
+                out.push_str(&f.canonical_bytes);
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+        }
+        if !self.data.is_empty() {
+            out.push_str("\nsection data\n");
+            for d in &self.data {
+                out.push_str(&format!("{} {}\n", d.name, d.hex));
+            }
+        }
+        for (n, v) in [("devices", &self.devices), ("layout", &self.layout)] {
+            if let Some(v) = v {
+                out.push_str(&format!("\nsection {n}\n{}\n", v.to_jcs()));
+            }
+        }
+        for (n, v) in [
+            ("schedule", &self.schedule),
+            ("certificate", &self.certificate),
+            ("coverage", &self.coverage),
+        ] {
+            if let Some(v) = v {
+                out.push_str(&format!("\nsection {n}\n{}\n", v.to_jcs()));
+            }
+        }
+        if self.draft_encodings {
+            Self::parse_draft(&out)
+        } else {
+            Self::parse(&out)
+        }
+    }
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
     /// Parse-level validation plus identity: verifies every stored
     /// interface hash. Mirrors the reference `check` report shape.
     pub fn check(&self) -> Result<CheckReport> {
         self.validate()?;
         crate::checker::validate(self)?;
+        crate::certificate::verify(self)?;
         let symbols = self.identity()?;
         for s in &self.symbols {
             let computed = &symbols[&s.name].interface_hash;
@@ -1790,6 +1891,13 @@ impl Object {
             }
             .into(),
             symbols,
+            proof_status: if unresolved_imports.is_empty() {
+                "proved"
+            } else {
+                "pending"
+            }
+            .into(),
+            pending_obligations: crate::history::pending(self),
             unresolved_imports,
         })
     }
@@ -1798,6 +1906,7 @@ impl Object {
     pub fn hash(&self) -> Result<CheckReport> {
         self.validate()?;
         crate::checker::validate(self)?;
+        crate::certificate::verify(self)?;
         let symbols = self.identity()?;
         let unresolved_imports: Vec<String> = self.imports.iter().map(|i| i.name.clone()).collect();
         Ok(CheckReport {
@@ -1809,6 +1918,13 @@ impl Object {
             }
             .into(),
             symbols,
+            proof_status: if unresolved_imports.is_empty() {
+                "proved"
+            } else {
+                "pending"
+            }
+            .into(),
+            pending_obligations: crate::history::pending(self),
             unresolved_imports,
         })
     }

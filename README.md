@@ -85,3 +85,25 @@ compares supported direct row semantics against the circuit on the exhaustive
 <=16-bit free input/memory domain. Unsupported direct rows and large-domain
 sampling fail explicitly. These diagnostic commands are not certificate
 claims; CC/R quantum diagnostic amplitudes use binary64 arithmetic.
+
+Proof output uses published draft metadata only with explicit opt-in:
+
+```sh
+bennett-circuits certificate input.bisa region --isa 0.9-draft --target target.json --dialect-mapping-version YOUR_MAPPING_VERSION
+bennett-circuits certify-object input.bisa region --isa 0.9-draft --target target.json --dialect-mapping-version YOUR_MAPPING_VERSION
+bennett-circuits check certified.bisa --isa 0.9-draft
+bennett-circuits link root.bisa library.bisa other-library.bisa
+bennett-circuits place-frame input.bisa region target.json --isa 0.9-draft
+bennett-circuits coverage input.bisa --source-map source-map.json
+```
+
+`certificate` prints §12 JSON; `certify-object` prints the object with its
+certificate. Parameters use the existing `--arg` and oracle `--budget` options.
+`link` emits a resolved, validated, rebound object; draft libraries require the
+same explicit `--isa` opt-in. Unlinked `check`/`hash` report `proof_status:
+"pending"` with `pending_obligations`. `place` and `place-qasm` attach typed
+frames when opted into the draft. The coverage source map maps JCS
+program-point arrays to real dialect stable IDs; absent mappings refuse.
+Reference certificates prove their reference relation, not a scheduled target
+realisation. See `docs/PLAN.md` for the still-required M4 breadth and the
+`b-isa-spec-8r4` library gate.

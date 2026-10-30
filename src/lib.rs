@@ -5,12 +5,17 @@
 
 pub mod amplitude;
 mod borrow;
+pub mod certificate;
 mod checker;
 pub mod classical;
+pub mod coverage;
 pub mod flatten;
+pub mod frame;
+pub mod history;
 pub mod ir;
 mod ir_codec;
 pub mod json;
+pub mod linking;
 pub mod lower;
 mod metadata;
 pub mod object;
@@ -23,6 +28,7 @@ pub mod sha256;
 pub mod simulation;
 pub mod step_check;
 pub mod target;
+mod translation;
 
 /// Crate version string.
 pub fn version() -> &'static str {

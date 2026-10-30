@@ -127,15 +127,20 @@ the target's own expressions, never hard-coded.
 
 ### Proof-carrying output
 
-Milestone 4. Emit §12 certificates bound to closure hashes: per-region frame
-descriptors, resource vectors, `gates_used`, cleanup entries keyed by
-`(variant, inherited_controls)`, error composition (local/inclusive,
-operator-norm vs diamond conversion), and claims — `exhaustive` (proof, over
-the full domain D of §5.2/§12.2) at small widths, `sampled` (evidence, with
-seeds and counts) above them, `structural` for borrow frames and adjoint
-tables, `numerical` for ε > 0 realisations. Proof and evidence are never
-blurred (NorthStar §5.1). Until then this crate emits no certificate and its
-differential harness is test evidence, labelled as such.
+M4 uses version 1 symbolic instruction histories, with formal argument/token
+atoms and exact call keys, to prove cleanup universally at `check`/`hash`.
+Actions execute their blocks in text order; labels are descriptive. Opaque
+imports carry pending body/proof obligations; an unlinked identity is never
+reported as a completed proof. §9.3 linking resolves signatures/pins, rejects
+conflicts, rebuilds closure identities, and rechecks the assembled program.
+A linked-object closure registry resolves §12 program/library references;
+certificate dependencies must form a DAG and verified results keep their
+invocation bindings. Draft §12 full positional before/after tables and typed
+§9.4 frames require explicit ISA 0.9-draft opt-in, never default 0.8 acceptance.
+Reference relation certificates cover only what is actually proved; numerical,
+channel, supplied schedules, generated-ordinal cleanup/recompute and realised
+context composition remain gated by **b-isa-spec-8r4** (local owner yz8).
+No sampling, corpus agreement or placeholder library substitutes for a proof.
 
 ### Exporters
 
@@ -297,3 +302,26 @@ undefined `eps_decade` integer index function. Both paths refuse naming their
 bead. The accepted default remains all-to-all logical connectivity. QIR/Quil
 stay M5 with explicit exporter refusals; wider/direct-machine diagnostic
 acceptance is M6 (`fgx`), not evidence that the circuit placement is unequal.
+
+## M4 implementation checkpoint — 2026-10-30
+
+Implemented: history-v1 formal token/argument and call/control keys; text-order
+action blocks; explicit pending-import reports; §9.3 name/signature/pin resolution,
+closure deduplication and identity-only rebinding; complete full-domain positional
+tables, bound unary inverse pairs, linked inverse-library claim DAGs, scalar
+translation witnesses, and adjoint-table claims; draft typed action frames and
+§13 explicit-trap coverage with supplied dialect source mappings.
+
+The 0.8 loader remains the default. `--isa 0.9-draft` explicitly enables the
+published B5/K13 metadata encodings on 0.8 source objects; it does not enable
+other 0.9 instructions. Reference-only certificates require a real target and an
+explicit dialect-mapping version. They do not certify scheduled realisations.
+
+M4 is **not complete**: indexed/memory/while histories spanning symbolic calls,
+remaining opaque paths outside that history subset, nested borrowed-domain
+identities, literal-oracle retained-history descriptors, broader translation
+replay and structural-only non-permutation output remain required under
+9xp.3 / 7bu / z9r / 4pf / 4fa. No decision bead is closed on the strength of
+finite test agreement. Numerical/channel claims, supplied schedules,
+generated-ordinal cleanup/recompute and realised-context composition still
+refuse with **b-isa-spec-8r4**; yz8 stays open. Complete M4 before M5 QIR/Quil.

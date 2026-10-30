@@ -183,7 +183,9 @@ pub(crate) fn verify(
             Some("exhaustive") => {
                 domain(get(claim, "domain")?, c)?;
                 let expected = get(claim, "expected")?;
-                if expected.get("program").and_then(Value::as_str) != Some(closure) {
+                if expected.get("program").and_then(Value::as_str) != Some(closure)
+                    && !(o.draft_encodings && expected.get("table").is_some())
+                {
                     bail!(
                         "unimplemented: §12 borrow expected-table/external-program replay; decision bennett-circuits-4pf (milestone 2)"
                     );

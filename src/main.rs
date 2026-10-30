@@ -35,6 +35,25 @@ fn report_json(report: &CheckReport) -> Value {
             Value::Str(report.object_hash.clone()),
         ),
         ("status".to_string(), Value::Str(report.status.clone())),
+        (
+            "proof_status".into(),
+            Value::Str(report.proof_status.clone()),
+        ),
+        (
+            "pending_obligations".into(),
+            Value::Array(
+                report
+                    .pending_obligations
+                    .iter()
+                    .map(|p| {
+                        Value::Object(BTreeMap::from([
+                            ("import".into(), Value::Str(p.import.clone())),
+                            ("rule".into(), Value::Str(p.rule.clone())),
+                        ]))
+                    })
+                    .collect(),
+            ),
+        ),
         ("symbols".to_string(), Value::Object(symbols)),
         (
             "unresolved_imports".to_string(),
@@ -677,6 +696,128 @@ fn oracle_diagnostic(args: &[String], o: &Object, name: &str) -> Result<()> {
 }
 
 fn run(args: &[String]) -> Result<()> {
+    let mut args = args.to_vec();
+    let draft = if let Some(i) = args.iter().position(|a| a == "--isa") {
+        if args.get(i + 1).map(String::as_str) != Some("0.9-draft") {
+            return Err(bennett_circuits::Error(
+                "--isa requires explicit 0.9-draft metadata opt-in".into(),
+            ));
+        }
+        args.drain(i..i + 2);
+        true
+    } else {
+        false
+    };
+    run_mode(&args, draft)
+}
+fn run_mode(args: &[String], draft: bool) -> Result<()> {
+    if args
+        .first()
+        .is_some_and(|a| matches!(a.as_str(), "certificate" | "certify-object"))
+        && args.len() >= 3
+    {
+        let text = std::fs::read_to_string(&args[1])
+            .map_err(|e| bennett_circuits::Error(e.to_string()))?;
+        let mut o = if draft {
+            Object::parse_draft(&text)?
+        } else {
+            Object::parse(&text)?
+        };
+        let mut options = args[3..].to_vec();
+        let mut binding = |flag: &str| -> Result<String> {
+            let i = options.iter().position(|a| a == flag).ok_or_else(|| {
+                bennett_circuits::Error(format!("certificate requires {flag} (§12.3)"))
+            })?;
+            let value = options
+                .get(i + 1)
+                .cloned()
+                .ok_or_else(|| bennett_circuits::Error(format!("{flag} value required")))?;
+            options.drain(i..i + 2);
+            Ok(value)
+        };
+        let path = binding("--target")?;
+        let mapping = binding("--dialect-mapping-version")?;
+        let target = bennett_circuits::target::Target::parse(
+            &std::fs::read_to_string(path).map_err(|e| bennett_circuits::Error(e.to_string()))?,
+        )?;
+        let context = bennett_circuits::certificate::Context {
+            target: &target,
+            dialect_mapping_version: &mapping,
+        };
+        let opts = basis_options(&o, &options)?;
+        let cert = bennett_circuits::certificate::generate(
+            &o,
+            args[2].trim_start_matches('@'),
+            &opts.args,
+            opts.budget,
+            draft,
+            &context,
+        )?;
+        if args[0] == "certify-object" {
+            o.certificate = Some(cert);
+            print!("{}", o.materialize()?.text());
+        } else {
+            println!("{}", cert.to_jcs());
+        }
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("coverage")
+        && args.len() == 4
+        && args[2] == "--source-map"
+    {
+        let o = load(&args[1])?;
+        let mapping = Value::parse(
+            &std::fs::read_to_string(&args[3])
+                .map_err(|e| bennett_circuits::Error(e.to_string()))?,
+        )?;
+        let mapping = mapping
+            .as_object()
+            .ok_or("coverage: source map must be a JSON object")?
+            .iter()
+            .map(|(k, v)| {
+                Ok((
+                    k.clone(),
+                    v.as_str()
+                        .ok_or("coverage: source id must be a string")?
+                        .into(),
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        println!("{}", bennett_circuits::coverage::traps(&o, &mapping)?);
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("link") && args.len() >= 3 {
+        let read = |path: &str| -> Result<Object> {
+            let text = std::fs::read_to_string(path)
+                .map_err(|e| bennett_circuits::Error(e.to_string()))?;
+            if draft {
+                Object::parse_draft(&text)
+            } else {
+                Object::parse(&text)
+            }
+        };
+        let root = read(&args[1])?;
+        let libraries = args[2..]
+            .iter()
+            .map(|p| read(p))
+            .collect::<Result<Vec<_>>>()?;
+        let registry = bennett_circuits::linking::Registry::link(&root, &libraries)?;
+        print!("{}", registry.object.text());
+        return Ok(());
+    }
+    if draft && args.len() == 2 && matches!(args[0].as_str(), "check" | "hash") {
+        let text = std::fs::read_to_string(&args[1])
+            .map_err(|e| bennett_circuits::Error(e.to_string()))?;
+        let o = Object::parse_draft(&text)?;
+        let report = if args[0] == "check" {
+            o.check()?
+        } else {
+            o.hash()?
+        };
+        println!("{}", report_json(&report));
+        return Ok(());
+    }
+
     if args.len() >= 2
         && matches!(
             args[0].as_str(),
@@ -731,14 +872,14 @@ fn run(args: &[String]) -> Result<()> {
         Some("run-program") if args.len()>=3 => {let o=load(&args[1])?;o.check()?;if args[3..].iter().any(|a|a=="--schedule"){return Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: unimplemented: §11 bound expansion library b-isa-spec-8r4 (milestone 3)".into()));}
             if let Some(pos)=args.iter().position(|a|a=="--target"){let path=args.get(pos+1).ok_or_else(||bennett_circuits::Error("target path required".into()))?;let text=std::fs::read_to_string(path).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;bennett_circuits::target::Target::parse(&text)?;return Err(bennett_circuits::Error("unimplemented: §10 target-aware classical launch (milestone 6); use place/place-qasm for coherent regions".into()));}println!("{}",bennett_circuits::classical::launch(&o,args[2].trim_start_matches('@'),&args[3..])?.to_jcs());Ok(())},
         Some("check-target") if args.len()==2 => {let text=std::fs::read_to_string(&args[1]).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;let t=bennett_circuits::target::Target::parse(&text)?;println!("{}",Value::Object(BTreeMap::from([("target_hash".into(),Value::Str(t.hash))])).to_jcs());Ok(())},
-        Some("place-qasm"|"place") if args.len()>=4 => {
+        Some("place-qasm"|"place"|"place-frame") if args.len()>=4 => {
             let o=load(&args[1])?;let text=std::fs::read_to_string(&args[3]).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;
             let t=bennett_circuits::target::Target::parse(&text)?;
             let opts=basis_options(&o,&args[4..])?;
             if opts.input.is_some() || opts.muts.is_some() || opts.ins.is_some() || opts.basis.is_some() || !opts.memory.is_empty() || opts.adjoint {return Err(bennett_circuits::Error("unimplemented: placement input option (milestone 3)".into()));}
             let name=args[2].trim_start_matches('@');
             let p=if o.function(name).is_some_and(|f|f.kind==bennett_circuits::object::FnKind::Oracle){let budget=opts.budget.ok_or_else(||bennett_circuits::Error("oracle placement requires --budget (§5.4)".into()))?;bennett_circuits::placement::place_oracle_on_target(&o,name,budget,&opts.args,&t)?}else{if opts.budget.is_some(){return Err(bennett_circuits::Error("action budget supplied via --arg token (§5.4)".into()));}bennett_circuits::placement::place_on_target(&o,name,&opts.args,&t)?};
-            if args[0]=="place-qasm" {print!("{}",bennett_circuits::qasm::export_placed(&p)?);}else{println!("{}",p.annotations()?.to_jcs());}Ok(())
+            if args[0]=="place-frame" {println!("{}",bennett_circuits::frame::placed(&p,&o,draft)?.to_json());}else if args[0]=="place-qasm" {print!("{}",if draft {bennett_circuits::qasm::export_placed_draft(&p,&o)?}else{bennett_circuits::qasm::export_placed(&p)?});}else{println!("{}",if draft {p.annotations_draft(&o)?}else{p.annotations()?}.to_jcs());}Ok(())
         },
         Some("schedule") => Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: §11 A consumer that does not implement the bound library rejects the schedule; unimplemented: unpublished expansion library b-isa-spec-8r4 (milestone 3)".into())),
 

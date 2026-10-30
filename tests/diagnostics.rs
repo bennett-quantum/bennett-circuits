@@ -14,7 +14,18 @@ fn contains(actual: &Value, expected: &Value) -> bool {
 }
 #[test]
 fn suite_a_execution_and_reversal() {
-    acceptance("A", |_| true);
+    acceptance("A", |c| {
+        if c.get("command").is_none() {
+            assert!(c.get("unavailable").is_some(), "unclassified case: {c}");
+            eprintln!(
+                "A unavailable (published staged case): {}",
+                c.get("id").unwrap()
+            );
+            false
+        } else {
+            true
+        }
+    });
 }
 #[test]
 fn suite_c_action_reversal_and_subbyte_memory() {

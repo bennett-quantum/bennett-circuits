@@ -406,10 +406,23 @@ pub fn parse_flat(text: &str) -> Result<Flat> {
 /// Placed executable leaves with attached source hierarchy, proof obligations,
 /// class assignments, logical mapping, timing and target binding.
 pub fn export_placed(p: &crate::placement::Placed) -> Result<String> {
+    export_placed_annotations(p, p.annotations()?)
+}
+/// Explicit ISA 0.9-draft §9.4 frame metadata on placed executable output.
+pub fn export_placed_draft(
+    p: &crate::placement::Placed,
+    o: &crate::object::Object,
+) -> Result<String> {
+    export_placed_annotations(p, p.annotations_draft(o)?)
+}
+fn export_placed_annotations(
+    p: &crate::placement::Placed,
+    annotations: crate::json::Value,
+) -> Result<String> {
     let n = p.flat.num_qubits.max(1);
     let mut text = format!(
         "OPENQASM 3.0;\ninclude \"stdgates.inc\";\n// bc-placement: {}\n// interface: {}\ngate placed {} {{\n",
-        p.annotations()?.to_jcs(),
+        annotations.to_jcs(),
         p.flat.interface.len(),
         (0..n)
             .map(|q| format!("v{q}"))

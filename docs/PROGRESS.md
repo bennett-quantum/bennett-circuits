@@ -683,3 +683,83 @@ lacks direct diagnostic literals wider than u128; deciding §5.2: “fr final =
 initial ⊕ code(F_B(x))”. Both report `unimplemented: … (milestone 6)`;
 the circuit builder/placed oracle harness already handles wide fault values.
 These failures are reported, not converted into passes or unavailable cases.
+
+## 2026-10-30 — M4 proof-carrying foundation (incomplete milestone)
+
+Read the complete M4 brief, ratification and all five decision notes. Consumed
+only published ISA 0.8/0.9-draft text and reference CLI/fixture data. No reference,
+VM or targets implementation source was read or linked. Std only; headless;
+all test artefacts under this repository's `.tmp`.
+
+`tests/proof_output.rs` exercises the maintained generated objects: full
+positional tuple replay and tamper/missing-binding rejection; both dirty-borrow
+values and a non-factorising negative map; two-level imports; resolved-body
+cleanup rejection; retained/rebound library certificates; two-level inverse
+claim DAGs with cyclic and wrong-result negatives; full-domain, fault-free
+unary inverse pairs at the actual budget; source-point/wire translation
+witnesses; the published B5 FRAME witness and hash; emitted placed-QASM frame
+round-trip; all explicit traps with actual source mapping and fault-zero cause;
+control contexts crossing text-order blocks; distinct formal tokens; quantum-use
+barriers and non-permutation calls with read-only dependency operands. The
+linker unit test proves rebinding does not rewrite argument strings or class
+names that happen to equal an identity. Existing static-checker tests retain
+the old accepted proof paths, with obsolete refusal assertions changed into
+positive history/pending tests and negative version/context checks.
+
+The reference gate materialises `.tmp/m4-reference/source.bisa` and its
+certified counterpart. Source `check`/`hash` identities agree; every generated
+basis row of this replay fixture agrees exactly with `run-action` (+1 phase).
+The draft certificate itself is submitted to **both** reference `check` and
+`hash`: both reject with `§12: §12: certificate version mismatch`.
+Deciding published 0.8 §12.3 sentence: “`versions` is the object
+`{ "isa", "object", "launch", "sched", "cert", "coverage", "target" }`
+of the seven header versions.” The producer's deliberate draft cert version
+is 0.9 while source execution stays 0.8, accepted here only through explicit
+`--isa 0.9-draft`. This divergence is a version boundary, not a passed replay.
+Broader emitted-certificate/reference replay remains in 9xp.3; it is not
+claimed from this one fixture. Arbitrary dirty borrow cannot be initialised by
+the reference's current `run-action` CLI; the full-domain Boolean kernel checks
+those tuples independently rather than substituting zero-borrow sampling.
+
+A new published suite-A case, `A-measure-draw-order-09`, has no executable
+command and explicitly declares itself unavailable pending 0.9. The maintained
+CLI harness now reports that staged case as unavailable instead of panicking;
+no case expectation was edited or reclassified by this repository.
+
+M4 remains in progress under 9xp and 9xp.3. The original ratified decision
+beads 7bu/z9r/4pf/4fa stay open for their remaining implementation breadth.
+Literal-oracle frame categorisation is an implementation gap (4fa), not a
+fabricated upstream-library blocker. Only the actual generated-ordinal,
+schedule, numerical/channel and realised-context paths remain library-gated
+by **b-isa-spec-8r4** / yz8. Next: finish M4, then M5 QIR/Quil.
+
+Published read-only conformance accounting for this checkpoint (pass/fail/
+unavailable): **A21/0/1 B35/0/0 C337/2/1 D7/0/6 E0/0/25 F33/0/4
+G10/0/14 H0/0/10**, 506 cases. A/C/E/F gained staged 0.9 unavailable cases;
+none was promoted or relabelled here. C's two failures remain the recorded
+`fgx` cases: `C-step-check-sumdb-fixed-db` (fixed-region direct diagnostic
+options; §14.1 “Executes an oracle's reference body per basis configuration”)
+and `C-step-check-wide-fault` (direct literals wider than u128; §5.2
+“fr final = initial ⊕ code(F_B(x))”). They are actual failures, not
+unavailable cases. The compiled published harness and logs are under `.tmp`.
+
+Additional red/green audit witnesses cover legacy 0.8 numerical certificates
+(they now refuse with 8r4 as draft executable claims already did), and action
+frames containing nested literal-oracle history (explicit 4fa refusal instead
+of silently recording history as scratch). Distinct proof records for one
+closure still refuse with 4pf pending proof-index composition; symbol
+closure deduplication itself is implemented and tested. The proof-output
+integration suite now has 18 tests; the static suite has 40; full offline
+and pre-push gates are required before the checkpoint commit.
+
+Full `cargo test --offline` gate: **147 passed, 0 failed**, including 18
+proof-output integration tests, 40 static-checker tests and 14 crate unit
+tests. `cargo fmt --check` and `cargo clippy --offline --all-targets -- -D
+warnings` pass. The unchanged `scripts/pre-push` is rerunning the full suite
+with `CARGO_NET_OFFLINE=true`; its result is recorded before committing.
+
+Final pre-commit gate: unchanged `scripts/pre-push` passes, **147 tests / 0
+failures**, with offline networking enforced. The completed explicit offline
+run also passed all 147 tests; fmt/check, strict all-target Clippy and
+`git diff --check` are green. Logs: `.tmp/m4-final-tests.log` and
+`.tmp/m4-pre-push.log`. No push was performed.

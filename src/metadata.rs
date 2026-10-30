@@ -379,7 +379,7 @@ fn schedule(v: &Value) -> Result<()> {
 }
 pub(crate) fn validate(o: &Object) -> Result<()> {
     if let Some(cert) = &o.certificate {
-        certificate(cert)?;
+        certificate_mode(cert, o.draft_encodings)?;
     }
     for s in &o.symbols {
         signature(&s.signature, &format!("symbol @{}", s.name))?;
@@ -462,6 +462,15 @@ pub(crate) fn validate(o: &Object) -> Result<()> {
                 "coverage",
                 &["lowered", "trapped", "shimmed"],
             )?;
+            let classification = e["classification"].as_str().unwrap();
+            if e.contains_key("fault_code") != (classification == "trapped")
+                || e.contains_key("shim_hash") != (classification == "shimmed")
+            {
+                return Err(error(
+                    "coverage",
+                    "fault_code/shim_hash must match classification (§13)",
+                ));
+            }
             natural(&e["count"], "coverage")?;
             if let Some(v) = e.get("fault_code") {
                 natural(v, "coverage")?;
@@ -541,7 +550,7 @@ fn domain(v: &Value) -> Result<()> {
     }
     Ok(())
 }
-fn claim(v: &Value) -> Result<()> {
+fn claim(v: &Value, draft: bool) -> Result<()> {
     let p = "certificate.claim";
     let m = map(v, p)?;
     let k = choice(
@@ -564,21 +573,26 @@ fn claim(v: &Value) -> Result<()> {
         "numerical" => vec!["subject", "metric", "precision_bits", "bound"],
         _ => vec!["subject", "metric", "precision_bits", "bound", "dual"],
     });
-    fields(
-        v,
-        p,
-        &keys,
-        if k == "sampled" {
-            &["kind", "domain", "sampler"]
-        } else {
-            &keys
-        },
-    )?;
+    let mut required = keys.clone();
+    if k == "sampled" && !draft {
+        required = vec!["kind", "domain", "sampler"];
+    }
+    if draft && matches!(k, "structural" | "exhaustive" | "sampled") {
+        keys.extend(["invocation", "subject"]);
+        if m.get("expected").and_then(Value::as_str) != Some("inverse_pair") {
+            required.push("invocation");
+            if matches!(k, "exhaustive" | "sampled") {
+                required.push("subject");
+            }
+        }
+    }
+    fields(v, p, &keys, &required)?;
     if let Some(v) = m.get("domain") {
         domain(v)?;
     }
     if let Some(v) = m.get("expected")
         && v.as_str() != Some("oracle")
+        && !(draft && v.as_str() == Some("inverse_pair"))
     {
         let expected = fields(v, p, &["table", "program"], &[])?;
         if expected.len() != 1 {
@@ -654,6 +668,16 @@ fn claim(v: &Value) -> Result<()> {
         }
     }
     if let Some(v) = m.get("subject") {
+        let required = if draft && matches!(k, "exhaustive" | "sampled") {
+            vec!["closure_hash", "variant", "inherited_controls"]
+        } else {
+            vec![
+                "closure_hash",
+                "variant",
+                "inherited_controls",
+                "schedule_hash",
+            ]
+        };
         let s = fields(
             v,
             p,
@@ -663,28 +687,27 @@ fn claim(v: &Value) -> Result<()> {
                 "inherited_controls",
                 "schedule_hash",
             ],
-            &[
-                "closure_hash",
-                "variant",
-                "inherited_controls",
-                "schedule_hash",
-            ],
+            &required,
         )?;
         hash(&s["closure_hash"], p)?;
-        hash(&s["schedule_hash"], p)?;
+        if let Some(v) = s.get("schedule_hash") {
+            hash(v, p)?;
+        }
         string(&s["variant"], p)?;
         natural(&s["inherited_controls"], p)?;
-        choice(
-            &m["metric"],
-            p,
-            if k == "numerical" {
-                &["operator_norm"]
-            } else {
-                &["diamond"]
-            },
-        )?;
-        natural(&m["precision_bits"], p)?;
-        decimal(&m["bound"], p)?;
+        if matches!(k, "numerical" | "channel") {
+            choice(
+                &m["metric"],
+                p,
+                if k == "numerical" {
+                    &["operator_norm"]
+                } else {
+                    &["diamond"]
+                },
+            )?;
+            natural(&m["precision_bits"], p)?;
+            decimal(&m["bound"], p)?;
+        }
     }
     if let Some(v) = m.get("dual") {
         for v in array(v, p)? {
@@ -706,7 +729,11 @@ fn claim(v: &Value) -> Result<()> {
 fn get_field<'a>(v: &'a Value, k: &str, p: &str) -> Result<&'a Value> {
     v.get(k).ok_or_else(|| error(p, "missing field"))
 }
+#[cfg(test)]
 fn certificate(v: &Value) -> Result<()> {
+    certificate_mode(v, false)
+}
+fn certificate_mode(v: &Value, draft: bool) -> Result<()> {
     let p = "certificate";
     let m = fields(
         v,
@@ -723,7 +750,7 @@ fn certificate(v: &Value) -> Result<()> {
         &["cert"],
     )?;
     for version in versions.values() {
-        if string(version, p)? != "0.8" {
+        if string(version, p)? != "0.8" && !(draft && string(version, p)? == "0.9") {
             return Err(error(p, "unsupported version"));
         }
     }
@@ -818,7 +845,7 @@ fn certificate(v: &Value) -> Result<()> {
         }
         let claims = array(&r["claims"], p)?;
         for c in claims {
-            claim(c)?;
+            claim(c, draft)?;
         }
         // Structural rules consume prior proof results. A self-supporting
         // cycle is not a proof, and an index cannot escape its claim array.
@@ -877,7 +904,17 @@ fn certificate(v: &Value) -> Result<()> {
                 }
                 "inverse_pairs" => {
                     for v in array(v, p)? {
-                        let i = fields(v, p, &["g", "ginv", "claim"], &["g", "ginv", "claim"])?;
+                        let allowed = if draft {
+                            vec!["g", "ginv", "claim", "budget", "arg_tokens"]
+                        } else {
+                            vec!["g", "ginv", "claim"]
+                        };
+                        let required = if draft {
+                            vec!["g", "ginv", "claim", "budget"]
+                        } else {
+                            vec!["g", "ginv", "claim"]
+                        };
+                        let i = fields(v, p, &allowed, &required)?;
                         hash(&i["g"], p)?;
                         hash(&i["ginv"], p)?;
                         index(&i["claim"])?;
@@ -938,10 +975,8 @@ fn certificate(v: &Value) -> Result<()> {
                 string(id, p)?;
             }
         }
-        if r.contains_key("frame") {
-            bail!(
-                "unimplemented: §9.4 certificate frame descriptor schema; decision bennett-circuits-4fa (milestone 2)"
-            );
+        if let Some(frame) = r.get("frame") {
+            crate::frame::Frame::parse(frame, draft)?;
         }
     }
     let comp = fields(

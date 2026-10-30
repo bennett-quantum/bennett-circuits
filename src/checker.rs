@@ -1254,7 +1254,7 @@ fn translation_frame(flat: &Flat, b: &BTreeSet<usize>) -> Result<()> {
     }
     Ok(())
 }
-fn translation_component(gates: &[FlatGate], b: &BTreeSet<usize>) -> Result<()> {
+pub(crate) fn translation_component(gates: &[FlatGate], b: &BTreeSet<usize>) -> Result<()> {
     let touches = |g: &FlatGate| {
         g.targets
             .iter()
@@ -1317,6 +1317,36 @@ fn translation_component(gates: &[FlatGate], b: &BTreeSet<usize>) -> Result<()> 
 }
 pub fn validate(o: &Object) -> Result<()> {
     crate::metadata::validate(o)?;
+    if let Some(cert) = &o.certificate {
+        for region in cert
+            .get("regions")
+            .and_then(|v| v.as_object())
+            .into_iter()
+            .flat_map(|m| m.values())
+        {
+            for claim in region
+                .get("claims")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                if matches!(
+                    claim.get("kind").and_then(|v| v.as_str()),
+                    Some("numerical" | "channel")
+                ) || claim.get("expected").and_then(|v| v.as_str()) == Some("oracle")
+                    || claim
+                        .get("subject")
+                        .and_then(|s| s.get("schedule_hash"))
+                        .is_some()
+                {
+                    bail!(
+                        "E_SCHEDULE_INFEASIBLE: executable/numerical/channel certificate replay requires expansion library b-isa-spec-8r4 (§12.1)"
+                    )
+                }
+            }
+        }
+    }
+
     region_graph(o)?;
     for (label, value, keys, required) in [
         (
@@ -1371,6 +1401,9 @@ pub fn validate(o: &Object) -> Result<()> {
             }
             action_readonly(o, f)?;
             crate::selectors::validate(o, f)?;
+            if (!f.groups[3].is_empty() || !o.imports.is_empty()) && crate::history::verify(o, f)? {
+                continue;
+            }
             if !f.groups[3].is_empty() {
                 if parameter_independent_action(o, f)? || composed_parameter_action(o, f)? {
                     continue;
@@ -1667,7 +1700,7 @@ fn action_readonly(o: &Object, f: &Function) -> Result<()> {
     Ok(())
 }
 
-fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
+pub(crate) fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
     // Contract-only interface calls have no local cleanup obligations. Their
     // structured compositions are checked inductively, including zero-trip
     // bodies. Never choose a concrete token to validate all tokens.

@@ -628,6 +628,22 @@ fn aggregate(target: &Target, events: &[Event], wires: &[TimedWire]) -> Result<R
     Ok((values, by_class))
 }
 impl Placed {
+    /// Explicit 0.9-draft §9.4 output; the default 0.8 annotations stay versioned.
+    pub fn annotations_draft(&self, object: &Object) -> Result<Value> {
+        let mut v = self.annotations()?;
+        let Value::Object(m) = &mut v else {
+            unreachable!()
+        };
+        m.insert(
+            "frame_encoding".into(),
+            Value::Str("ISA 0.9-draft §9.4 B5".into()),
+        );
+        m.insert(
+            "frame".into(),
+            crate::frame::placed(self, object, true)?.to_json(),
+        );
+        Ok(v)
+    }
     pub fn annotations(&self) -> Result<Value> {
         fn s(x: impl ToString) -> Value {
             Value::Str(x.to_string())
@@ -658,7 +674,7 @@ impl Placed {
             ("target_hash".into(), s(&self.target_hash)),
             ("source_ir".into(), crate::ir_codec::encode(&self.source)),
             ("request".into(),self.request.clone()),
-            ("obligations".into(),Value::Array(["§5.2/§5.3 full-domain interface equivalence; source proof obligations retained", "§5.6 borrowed-system identity, including external entanglement", "§8.3 scheme correctness is the target author's obligation", "§9.4/§12 frame certificate schema publication: bennett-circuits-4fa", "§12 new certificate generation remains milestone 4"].iter().map(|s|Value::Str((*s).into())).collect())),
+            ("obligations".into(),Value::Array(["§5.2/§5.3 full-domain interface equivalence; source proof obligations retained", "§5.6 borrowed-system identity, including external entanglement", "§8.3 scheme correctness is the target author's obligation", "§9.4 typed frames require explicit ISA 0.9-draft opt-in", "§12 reference certificates are separate from placed-realisation equivalence"].iter().map(|s|Value::Str((*s).into())).collect())),
             (
                 "source_certificate".into(),
                 self.certificate.clone().unwrap_or(Value::Null),

@@ -772,16 +772,11 @@ fn symbolic_interface_calls_do_not_bypass_declared_loop_bounds() {
 }
 
 #[test]
-fn symbolic_workspace_spanning_an_opaque_call_stays_an_explicit_proof_gap() {
+fn symbolic_workspace_spanning_calls_is_universal() {
     let body = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\nd = qcopy x\noracle_call @o tk (x) t fr () ()\nquncopy x d\n";
-    let e = generated(body).hash().unwrap_err();
-    assert!(
-        e.0.contains("unimplemented: §6")
-            && e.0.contains("milestone 2")
-            && e.0.contains("bennett-circuits-7bu")
-            && e.0.contains("bennett-circuits-z9r"),
-        "{e}"
-    );
+    generated(body).hash().unwrap();
+    let bad = body.replace("quncopy x d", "quncopy t d");
+    assert!(generated(&bad).hash().unwrap_err().0.contains("§6.2"));
 }
 
 #[test]
@@ -989,18 +984,12 @@ fn undecided_frame_and_replay_contracts_name_their_beads() {
 #[test]
 fn concrete_cfg_and_unlinked_workspace_refusals_also_name_decisions() {
     let o = generated("action @a (t:wire mut) () () () ()\n^first():\nx t\n^second():\nx t\n");
-    let e = o.hash().unwrap_err();
-    assert!(
-        e.0.contains("unimplemented:") && e.0.contains("bennett-circuits-7bu"),
-        "{e}"
-    );
+    o.hash().unwrap();
     let mut o = generated(
         "action @a (t:wire mut) () () () ()\n^entry():\nd = qcopy t\naction_call @external (t) () () ()\nquncopy t d\n",
     );
     o.imports.push(bennett_circuits::object::Import{name:"external".into(),pinned_closure_hash:None,signature:Value::parse(r#"{"abi":"0.8","kind":"action","tier":"q","mut":[1],"in":[],"mem":[],"args":[],"bounds":[]}"#).unwrap()});
-    let e = o.hash().unwrap_err();
-    assert!(
-        e.0.contains("unimplemented:") && e.0.contains("bennett-circuits-z9r"),
-        "{e}"
-    );
+    let report = o.hash().unwrap();
+    assert_eq!(report.proof_status, "pending");
+    assert!(!report.pending_obligations.is_empty());
 }

@@ -123,11 +123,8 @@ impl<'a> FnLower<'a> {
                 Ok((p.name.clone(), validate_arg(&p.ty, a)?))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        if f.blocks.len() != 1 || !f.blocks[0].params.is_empty() {
-            bail!(
-                "unimplemented: multi-block action @{}; decision bennett-circuits-7bu (milestone 2); Q actions lower from one structured block",
-                f.name
-            );
+        if f.blocks.is_empty() || f.blocks.iter().any(|b| !b.params.is_empty()) {
+            bail!("lower: action requires text-order blocks without block arguments (§5.3)");
         }
         let mut circuit = Circuit {
             name: f.name.clone(),
@@ -399,7 +396,13 @@ impl<'a> FnLower<'a> {
 
     fn lower_body(&mut self) -> Result<()> {
         // Clone the instruction list so the borrow of `self.f` ends.
-        let mut instrs = self.f.blocks[0].instrs.clone();
+        let original = self
+            .f
+            .blocks
+            .iter()
+            .flat_map(|b| b.instrs.clone())
+            .collect::<Vec<_>>();
+        let mut instrs = original.clone();
         fn substitute(is: &mut [Instr], args: &BTreeMap<String, Argument>) {
             for i in is {
                 for o in &mut i.operands {
@@ -455,7 +458,7 @@ impl<'a> FnLower<'a> {
             Ok(())
         }
         specialised_bounds(
-            &self.f.blocks[0].instrs,
+            &original,
             &instrs,
             &self.f.bounds,
             &mut 0,
