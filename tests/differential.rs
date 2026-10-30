@@ -98,6 +98,7 @@ fn every_action_every_basis_matches_run_action() {
             let text = qasm::export(&program).unwrap();
             assert_eq!(qasm::parse(&text).unwrap(), program);
             let flat = qasm::parse_flat(&text).unwrap();
+            let placed = bennett_circuits::placement::place_action(&obj, &f.name, &[]).unwrap();
             let width = flat.interface.len();
             assert!(
                 width < usize::BITS as usize,
@@ -134,6 +135,13 @@ fn every_action_every_basis_matches_run_action() {
                 let ours = std::panic::catch_unwind(|| sim::basis(&flat, &bits)).unwrap_or_else(|failure| {
                     panic!("DIVERGENCE {} @{} input={bits}: exported simulation failed {failure:?}; reference={reference:?}", path.display(), f.name)
                 });
+                assert_eq!(
+                    sim::basis(&placed.flat, &bits),
+                    ours,
+                    "PLACEMENT DIVERGENCE {} @{} input={bits}",
+                    path.display(),
+                    f.name
+                );
                 let display = ours
                     .iter()
                     .map(|(b, a)| (b.clone(), a.value()))
@@ -167,7 +175,7 @@ fn every_action_every_basis_matches_run_action() {
     }
     assert!(actions >= 19, "expected fixture plus supplemental actions");
     eprintln!(
-        "HARNESS: {actions} actions, {cases} basis comparisons, {cases} agree, 0 diverge; phase-sensitive display tolerance 2e-12; exact support/workspace checks"
+        "HARNESS: {actions} actions, {cases} basis comparisons, {cases} agree, 0 diverge; phase-sensitive display tolerance 2e-12; exact support/workspace checks; placed circuits agree on all {cases} tuples"
     );
 }
 

@@ -35,11 +35,26 @@ pub fn flatten(program: &Program) -> Result<Flat> {
 /// closes windows even if its implementation consists of diagonal gates.
 pub(crate) type CallEvents = Vec<(usize, Vec<usize>)>;
 pub(crate) fn flatten_with_events(program: &Program) -> Result<(Flat, CallEvents)> {
+    let (flat, events, _) = flatten_allocations(program)?;
+    Ok((flat, events))
+}
+
+/// Allocation provenance for placement, including nested and adjoint instances.
+#[derive(Debug, Clone)]
+pub(crate) struct Allocation {
+    pub wires: Vec<usize>,
+    pub kind: WsKind,
+    pub class: String,
+}
+pub(crate) fn flatten_allocations(
+    program: &Program,
+) -> Result<(Flat, CallEvents, Vec<Allocation>)> {
     let top = program.top_circuit()?;
     let mut alloc = Allocator {
         next: 0,
         workspace: Vec::new(),
         nonperm_calls: Vec::new(),
+        allocations: Vec::new(),
     };
     let mut map: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut interface = Vec::new();
@@ -58,10 +73,12 @@ pub(crate) fn flatten_with_events(program: &Program) -> Result<(Flat, CallEvents
             gates,
         },
         alloc.nonperm_calls,
+        alloc.allocations,
     ))
 }
 
 struct Allocator {
+    allocations: Vec<Allocation>,
     next: usize,
     workspace: Vec<usize>,
     nonperm_calls: Vec<(usize, Vec<usize>)>,
@@ -119,6 +136,11 @@ fn expand(
     let mut map = outer_map.clone();
     for w in &circuit.workspace {
         let wires = alloc.fresh(u64::from(w.width), true);
+        alloc.allocations.push(Allocation {
+            wires: wires.clone(),
+            kind: w.kind,
+            class: w.class.clone(),
+        });
         map.insert(w.name.clone(), wires);
     }
     for node in &circuit.body {

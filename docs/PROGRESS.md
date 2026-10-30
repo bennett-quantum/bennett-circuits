@@ -1,5 +1,40 @@
 # bennett-circuits — progress
 
+## 2026-10-30 — M3 first placement slice
+
+- `placement::place_action` requires object validation before reuse and
+  returns the placed flat circuit, logical/physical map and live intervals.
+  First/last gate uses include controls; intervals are half-open, so operands
+  of the same gate cannot alias. Clean slots reuse only within the same
+  requested class. Unused clean wires disappear. Interfaces, borrowed wires
+  (including nested/adjoint instances) and local regions remain dedicated.
+- Red: placement API was absent. Green: sequential scratch reduces 3 to 2
+  total wires; controlled call/adjoint scratch reduces 4 to 3, preserving
+  exact interference. A hand-derived phase i·exp(iπ/4) agrees exactly.
+  Tests also cover overlap, class pools, arbitrary dirty borrowed inputs,
+  pinned local images, determinism and refusal to bypass validation.
+- The 13 fixture actions agree over all 740 interface basis inputs against
+  their original circuits. The existing 19-action / 930-tuple reference CLI
+  harness additionally compares the placed exact state on every tuple.
+  These comparisons are evidence; no certificate or optimality claim is made.
+- Supplied schedules fail explicitly under §11 naming **b-isa-spec-8r4**.
+  This slice does not choose classes from targets, implement schemes/epsilon,
+  report scheduled resource costs or serialize frames. M3 `1ud` remains open.
+- M2 follow-ups: `7e6baae` preserves commuting XOR deliveries across distinct
+  signatures; `b4b28ac` names decisions on concrete CFG/imported lowering
+  paths too. Check agreement is **111/0**. All five (b) owners remain open.
+
+Final gates: **107 passed / 0 failed / 0 ignored**; `cargo fmt --check`,
+strict all-target Clippy and `git diff --check` pass. Logs:
+`.tmp/m3-final-tests.log`, `.tmp/m3-final-{A,B,F}.log`.
+Conformance **A 21/0/0; B 35/0/0; F 33/0/2** (pass/fail/unavailable).
+A/B exit 0; F exits 2 for unchanged missing frame-live-range/linking probes.
+Check **111 agree / 0 diverge**; actions **19 / 930 / 930 agree** including
+placement, oracles **59 occurrences / 488 / 488 agree**. Wide oracle domains
+retain four-pattern sampling. No deciding-spec divergence was observed.
+M3 first-slice bead `pk3.4` is closed; M3 `1ud` remains in progress.
+No push, Dolt sync or writes to another repository.
+
 ## 2026-10-30 — M2 disposition; M3 authorised
 
 pk3/pk3.2 closed **by the requested disposition process**, not as a claim of

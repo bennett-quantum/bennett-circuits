@@ -14,6 +14,7 @@ pub mod lower;
 mod metadata;
 pub mod object;
 pub mod oracle;
+pub mod placement;
 pub mod proof;
 pub mod qasm;
 mod selectors;

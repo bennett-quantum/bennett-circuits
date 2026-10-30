@@ -34,18 +34,25 @@ exported gate families exactly. Pass an explicit small budget for circuit
 execution; the reference-compatible default of one million steps is expensive
 when materialised as a literal circuit.
 
-Milestone 2 is **in progress**, not complete. Oracle construction and action
-specialisation are implemented. qinplace compilation exhaustively checks
-fault freedom and both inverse compositions under the actual token, with
-streaming enumeration and no sampling. ISA certificate serialization is M4;
-verified incoming library-certificate support remains M2 checker work.
+M2 construction and specialisation are implemented. The remaining general
+proof obligations have explicit decision beads rather than another milestone
+deferral; see [the disposition note](docs/design/2026-10-30-m2-open-proofs.md).
+pk3/pk3.2 are closed by the requested disposition process, not as a complete
+static-checker claim. Unsupported proofs still fail loudly naming their bead.
 
-`check` now validates schemas, widths, cleanup windows and translation-lemma
-borrow frames in addition to identity. It agrees on the 14 fixture/example
-objects, three corruption variants and 31 Suite F check cases. General
-symbolic parameterized-action validation and CFG analyses still have explicit
-M2 errors. See HANDOFF.md and docs/PROGRESS.md for the exact gaps; corpus
-agreement does not claim a complete static checker.
+M3 has a first placement slice: `placement::place_action(&object, action,
+&args)` returns a flat circuit, logical-to-physical mapping and live intervals.
+It validates cleanliness before reusing clean workspace with disjoint gate
+lifetimes and the same requested class. Interfaces, dirty borrowed wires and
+local-region wires stay dedicated. `any` remains unresolved until target
+assignment. This API rejects supplied schedules naming **b-isa-spec-8r4**;
+full target assignment and schedule consumption remain M3 work.
+
+`check` validates schemas, widths, cleanup windows, matched invocation
+multiplicities, translation-lemma borrow frames and the documented incoming
+certificate subset in addition to identity. General symbolic/opaque workspace
+proofs and broader certificate replay retain explicit named errors. See
+HANDOFF.md and docs/PROGRESS.md for exact coverage.
 
 Harnesses: 19 actions / 930 basis comparisons and 59 oracle occurrences / 488
 basis comparisons, all agree. Small oracle interfaces (<=10 bits) are

@@ -238,3 +238,27 @@ amplitudes are compared phase-sensitively to the CLI's binary64 output at
 absolute tolerance 2e-12. This comparison is test evidence, not an interval
 proof or a certificate. All interface basis values are covered; borrowed
 wires start at zero as required by the CLI, not the full dirty domain D.
+
+## M3 first slice — 2026-10-30
+
+M2 pk3/pk3.2 were closed by the user's explicit disposition procedure;
+`docs/design/2026-10-30-m2-open-proofs.md` and its five decision beads retain
+all remaining proof obligations. This is not a complete-checker claim.
+
+`placement::place_action(object, action, args)` validates the object, lowers
+with fixed arguments, and returns a placed flat circuit, logical-to-physical
+mapping and half-open gate live intervals. Expanded call allocations retain
+workspace kind and requested class. Clean wires reuse slots only within the
+same requested class and only after their last gate use; controls count as
+uses. Unused clean wires need no physical slot. Interface, dirty borrowed and
+local-region wires stay dedicated. This is target-independent placement;
+`any` still means an unresolved requested class. It does not choose target
+schemes, charge resources or claim optimality.
+
+The original hierarchical IR and QASM exporter remain the source form. The
+placed flat circuit is a library output with its explicit allocation map;
+subsequent M3 slices add target assignment/capacity, scheduled events and
+export integration. Supplied schedules fail explicitly naming
+**b-isa-spec-8r4**, because the unpublished generated-operation contract must
+not be guessed or silently ignored. M3 owner: `bennett-circuits-1ud`; first
+slice: `bennett-circuits-pk3.4` (parented under M3).
