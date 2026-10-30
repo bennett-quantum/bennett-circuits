@@ -121,6 +121,7 @@ fn node(v: &Node) -> V {
             s(gate(g.gate)),
             cs(&g.controls),
             a(g.targets.iter().map(q)),
+            n(g.own_controls as u32),
         ]),
         Node::Call {
             callee,
@@ -182,8 +183,9 @@ fn rnode(v: &V) -> Result<Node> {
         });
     }
     if kind == "gate" {
-        fields(v, 4)?;
+        fields(v, 5)?;
         return Ok(Node::Gate(GateInst {
+            own_controls: num(&x[4])? as usize,
             gate: read_gate(&st(&x[1])?)?,
             controls: rcs(&x[2])?,
             targets: list(&x[3])?.iter().map(rq).collect::<Result<_>>()?,

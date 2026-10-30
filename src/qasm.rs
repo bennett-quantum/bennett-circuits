@@ -402,3 +402,34 @@ pub fn parse_flat(text: &str) -> Result<Flat> {
         gates,
     })
 }
+
+/// Placed executable leaves with attached source hierarchy, proof obligations,
+/// class assignments, logical mapping, timing and target binding.
+pub fn export_placed(p: &crate::placement::Placed) -> Result<String> {
+    let n = p.flat.num_qubits.max(1);
+    let mut text = format!(
+        "OPENQASM 3.0;\ninclude \"stdgates.inc\";\n// bc-placement: {}\n// interface: {}\ngate placed {} {{\n",
+        p.annotations()?.to_jcs(),
+        p.flat.interface.len(),
+        (0..n)
+            .map(|q| format!("v{q}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    for g in &p.flat.gates {
+        text.push_str(&invocation(
+            &crate::ir_codec::gate(g.gate),
+            &g.controls,
+            &g.targets,
+            false,
+        ));
+    }
+    text.push_str(&format!(
+        "}}\nqubit[{n}] q;\nplaced {};\n",
+        (0..n)
+            .map(|q| format!("q[{q}]"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    Ok(text)
+}

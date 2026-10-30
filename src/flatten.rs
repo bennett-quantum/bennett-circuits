@@ -49,12 +49,20 @@ pub(crate) struct Allocation {
 pub(crate) fn flatten_allocations(
     program: &Program,
 ) -> Result<(Flat, CallEvents, Vec<Allocation>)> {
+    let (f, e, a, _) = flatten_contexts(program)?;
+    Ok((f, e, a))
+}
+pub(crate) type Contexts = Vec<usize>;
+pub(crate) fn flatten_contexts(
+    program: &Program,
+) -> Result<(Flat, CallEvents, Vec<Allocation>, Contexts)> {
     let top = program.top_circuit()?;
     let mut alloc = Allocator {
         next: 0,
         workspace: Vec::new(),
         nonperm_calls: Vec::new(),
         allocations: Vec::new(),
+        contexts: Vec::new(),
     };
     let mut map: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut interface = Vec::new();
@@ -74,10 +82,12 @@ pub(crate) fn flatten_allocations(
         },
         alloc.nonperm_calls,
         alloc.allocations,
+        alloc.contexts,
     ))
 }
 
 struct Allocator {
+    contexts: Vec<usize>,
     allocations: Vec<Allocation>,
     next: usize,
     workspace: Vec<usize>,
@@ -144,11 +154,19 @@ fn expand(
         map.insert(w.name.clone(), wires);
     }
     for node in &circuit.body {
+        let begin = gates.len();
         match node {
             Node::Gate(g) => {
                 gates.push(FlatGate {
                     gate: g.gate,
-                    controls: ctrls(&map, inherited, &g.controls)?,
+                    controls: {
+                        if g.own_controls > g.controls.len() {
+                            bail!("flatten: own control count exceeds operands");
+                        }
+                        let mut cs = ctrls(&map, &[], &g.controls[..g.own_controls])?;
+                        cs.extend(ctrls(&map, inherited, &g.controls[g.own_controls..])?);
+                        cs
+                    },
                     targets: g
                         .targets
                         .iter()
@@ -164,7 +182,7 @@ fn expand(
                 let base = ctrls(&map, inherited, controls)?;
                 for (si, di) in s.iter().zip(&d) {
                     let mut cs = base.clone();
-                    cs.push((*si, true));
+                    cs.insert(0, (*si, true));
                     gates.push(FlatGate {
                         gate: BaseGate::X,
                         controls: cs,
@@ -177,7 +195,7 @@ fn expand(
                 let base = ctrls(&map, inherited, controls)?;
                 for (si, di) in s.iter().zip(&d) {
                     let mut cs = base.clone();
-                    cs.push((*si, true));
+                    cs.insert(0, (*si, true));
                     gates.push(FlatGate {
                         gate: BaseGate::X,
                         controls: cs,
@@ -291,6 +309,27 @@ fn expand(
                 inh.clear();
             }
         }
+        if !matches!(node, Node::Call { .. }) {
+            let own = match node {
+                Node::Gate(g) => Some(g.own_controls),
+                Node::Copy { .. } | Node::Uncopy { .. } | Node::Xor { .. } => Some(1),
+                Node::Exch { .. } => Some(0),
+                _ => None,
+            };
+            for gate in &gates[begin..] {
+                alloc.contexts.push(own.unwrap_or_else(|| {
+                    gate.controls.len()
+                        - inherited.len()
+                        - match node {
+                            Node::Load { controls, .. }
+                            | Node::Unload { controls, .. }
+                            | Node::Store { controls, .. }
+                            | Node::ExchM { controls, .. } => controls.len(),
+                            _ => 0,
+                        }
+                }));
+            }
+        }
     }
     Ok(())
 }
@@ -327,16 +366,17 @@ fn expand_mem(
     let base = ctrls(map, inherited, controls)?;
     let num_cells = 1u64 << a_w;
     for cell in 0..num_cells {
-        let mut eq = base.clone();
+        let mut eq = Vec::new();
         for (b, wire) in addr_wires.iter().enumerate() {
             eq.push((*wire, (cell >> b) & 1 == 1));
         }
+        eq.extend_from_slice(&base);
         for j in 0..cell_w as usize {
             let cell_wire = cells[cell as usize * cell_w as usize + j];
             match op {
                 MemOp::Load => {
                     let mut cs = eq.clone();
-                    cs.push((cell_wire, true));
+                    cs.insert(0, (cell_wire, true));
                     gates.push(FlatGate {
                         gate: BaseGate::X,
                         controls: cs,
@@ -345,7 +385,7 @@ fn expand_mem(
                 }
                 MemOp::Store => {
                     let mut cs = eq.clone();
-                    cs.push((val_wires[j], true));
+                    cs.insert(0, (val_wires[j], true));
                     gates.push(FlatGate {
                         gate: BaseGate::X,
                         controls: cs,

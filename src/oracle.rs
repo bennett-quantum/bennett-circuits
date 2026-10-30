@@ -123,6 +123,7 @@ impl Build {
             *values.entry(t.clone()).or_default() ^= true;
         }
         self.c.body.push(Node::Gate(GateInst {
+            own_controls: controls.len(),
             gate: BaseGate::X,
             controls: controls
                 .into_iter()

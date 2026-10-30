@@ -1,3 +1,9 @@
+M3 implementation checkpoint: §8 target loader/expressions, class/capacity,
+native/scheme placement, sequential event accounting and annotated QASM now
+implemented; full acceptance audit pending. Read latest docs/PROGRESS.md.
+D green 7/0/5; new maintained D/G CLI probes green; target fixture differential
+740/740, no divergences. Topology/routing gap b4k filed isa-0.9.
+
 State 2026-10-30: M1 complete; M2 disposition closed; M3 first slice landed.
 Sole implementer. No pushes, Dolt remote sync or edits to another repository.
 Reference execution uses only its CLI; no code copied across the contract.

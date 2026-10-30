@@ -6,12 +6,27 @@ fn contains(actual: &Value, expected: &Value) -> bool {
         (Value::Object(a), Value::Object(e)) => e
             .iter()
             .all(|(k, v)| a.get(k).is_some_and(|a| contains(a, v))),
+        (Value::Array(a), Value::Array(e)) => {
+            a.len() == e.len() && a.iter().zip(e).all(|(a, e)| contains(a, e))
+        }
         _ => actual == expected,
     }
 }
 #[test]
 fn suite_a_execution_and_reversal() {
     acceptance("A", |_| true);
+}
+#[test]
+fn suite_d_exact_actions() {
+    acceptance("D", |c| {
+        c.get("command").is_some() && c.get("unavailable").is_none()
+    });
+}
+#[test]
+fn suite_g_one_shot_launch() {
+    acceptance("G", |c| {
+        c.get("command").is_some() && c.get("unavailable").is_none()
+    });
 }
 #[test]
 fn suite_b_prefix_reversal_and_step_check() {
@@ -29,7 +44,8 @@ fn acceptance(suite: &str, include: impl Fn(&Value) -> bool) {
         .join(format!("bennett-isa-spec/conformance/cases/{suite}"));
     for entry in std::fs::read_dir(cases).unwrap() {
         let dir = entry.unwrap().path();
-        let c = Value::parse(&std::fs::read_to_string(dir.join("case.json")).unwrap()).unwrap();
+        let c =
+            Value::parse_target(&std::fs::read_to_string(dir.join("case.json")).unwrap()).unwrap();
         if !include(&c) {
             continue;
         }
@@ -60,7 +76,7 @@ fn acceptance(suite: &str, include: impl Fn(&Value) -> bool) {
             String::from_utf8_lossy(&output.stderr)
         );
         if let Some(json) = expect.get("stdout_json") {
-            let actual = Value::parse(&String::from_utf8(output.stdout).unwrap()).unwrap();
+            let actual = Value::parse_target(&String::from_utf8(output.stdout).unwrap()).unwrap();
             assert!(
                 contains(&actual, json),
                 "{}: actual={actual:?}; expected={json:?}",

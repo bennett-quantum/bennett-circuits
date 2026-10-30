@@ -3,6 +3,7 @@
 //! `bennett-isa-spec`). See `docs/PLAN.md` for the architecture and
 //! milestone scope.
 
+pub mod amplitude;
 mod borrow;
 mod checker;
 pub mod classical;
@@ -19,7 +20,9 @@ pub mod proof;
 pub mod qasm;
 mod selectors;
 pub mod sha256;
+pub mod simulation;
 pub mod step_check;
+pub mod target;
 
 /// Crate version string.
 pub fn version() -> &'static str {

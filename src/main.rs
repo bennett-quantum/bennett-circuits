@@ -404,14 +404,45 @@ fn run_basis(args: &[String]) -> Result<()> {
             }
             bits
         };
-        let output = proof::basis(&flat, &input)?;
+        let mut executed = flat.clone();
+        let reversing = args[0] == "reverse";
+        if reversing {
+            executed.gates.extend(flat.gates.iter().rev().map(|g| {
+                let mut g = g.clone();
+                g.gate = g.gate.adjoint();
+                g
+            }));
+        }
+        let bits = input
+            .iter()
+            .map(|b| if *b { '1' } else { '0' })
+            .collect::<String>();
+        let state = bennett_circuits::simulation::basis(&executed, &bits);
+        let definite = |start: usize, width: usize| -> Value {
+            let values = state
+                .keys()
+                .map(|k| k[start..start + width].to_string())
+                .collect::<std::collections::BTreeSet<_>>();
+            if values.len() != 1 {
+                Value::Null
+            } else {
+                uint(
+                    &values
+                        .first()
+                        .unwrap()
+                        .bytes()
+                        .map(|b| b == b'1')
+                        .collect::<Vec<_>>(),
+                )
+            }
+        };
         let mut cursor = 0;
         let mut bundles = |bs: &[bennett_circuits::ir::Bundle]| {
             bs.iter()
                 .map(|b| {
-                    let value = uint(&output[cursor..cursor + b.width as usize]);
+                    let v = definite(cursor, b.width as usize);
                     cursor += b.width as usize;
-                    value
+                    v
                 })
                 .collect::<Vec<_>>()
         };
@@ -421,31 +452,47 @@ fn run_basis(args: &[String]) -> Result<()> {
         for m in &c.mem {
             let cells = (0..m.num_cells())
                 .map(|_| {
-                    let value = uint(&output[cursor..cursor + m.cell_width as usize]);
+                    let v = definite(cursor, m.cell_width as usize);
                     cursor += m.cell_width as usize;
-                    value
+                    v
                 })
                 .collect();
             memory.insert(m.name.clone(), Value::Array(cells));
         }
-        let bits = output
-            .iter()
-            .map(|b| if *b { '1' } else { '0' })
-            .collect::<String>();
-        let state = Value::Object(BTreeMap::from([(
-            bits,
-            Value::Array(vec![Value::Int("1".into()), Value::Int("0".into())]),
-        )]));
+        let equals_entry =
+            state.len() == 1 && state.get(&bits) == Some(&bennett_circuits::amplitude::Amp::one());
+        if reversing && !equals_entry {
+            return Err(Error(
+                "§5.3 action adjoint did not restore entry exactly".into(),
+            ));
+        }
+        let state = Value::Object(
+            state
+                .into_iter()
+                .map(|(k, a)| {
+                    let (re, im) = a.value();
+                    (
+                        k,
+                        Value::Array(vec![Value::Int(re.to_string()), Value::Int(im.to_string())]),
+                    )
+                })
+                .collect(),
+        );
         println!(
             "{}",
             Value::Object(BTreeMap::from([
                 ("action".into(), Value::Str(name.into())),
                 ("adjoint".into(), Value::Bool(options.adjoint)),
-                ("wires".into(), Value::Int(output.len().to_string())),
+                ("wires".into(), Value::Int(input.len().to_string())),
                 ("state".into(), state),
                 ("mut".into(), Value::Array(muts)),
                 ("in".into(), Value::Array(ins)),
-                ("mem".into(), Value::Object(memory))
+                ("mem".into(), Value::Object(memory)),
+                (
+                    "status".into(),
+                    Value::Str(if reversing { "REVERSED" } else { "COMPLETED" }.into())
+                ),
+                ("equals_entry".into(), Value::Bool(equals_entry))
             ]))
             .to_jcs()
         );
@@ -621,10 +668,28 @@ fn run(args: &[String]) -> Result<()> {
     {
         let o = load(&args[1])?;
         o.check()?;
+        if args[0] == "reverse"
+            && o.function(args[2].trim_start_matches('@'))
+                .is_some_and(|f| f.is_action())
+        {
+            return run_basis(args);
+        }
         return oracle_diagnostic(args, &o, args[2].trim_start_matches('@'));
     }
     match args.first().map(String::as_str) {
         Some("run-oracle"|"run-action") if args.len()>=3 => run_basis(args),
+        Some("run-program") if args.len()>=3 => {let o=load(&args[1])?;o.check()?;println!("{}",bennett_circuits::classical::launch(&o,args[2].trim_start_matches('@'),&args[3..])?.to_jcs());Ok(())},
+        Some("check-target") if args.len()==2 => {let text=std::fs::read_to_string(&args[1]).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;let t=bennett_circuits::target::Target::parse(&text)?;println!("{}",Value::Object(BTreeMap::from([("target_hash".into(),Value::Str(t.hash))])).to_jcs());Ok(())},
+        Some("place-qasm"|"place") if args.len()>=4 => {
+            let o=load(&args[1])?;let text=std::fs::read_to_string(&args[3]).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;
+            let t=bennett_circuits::target::Target::parse(&text)?;
+            let opts=basis_options(&o,&args[4..])?;
+            if opts.budget.is_some() || opts.input.is_some() || opts.muts.is_some() || opts.ins.is_some() || opts.basis.is_some() || !opts.memory.is_empty() || opts.adjoint {return Err(bennett_circuits::Error("unimplemented: placement input option (milestone 3)".into()));}
+            let p=bennett_circuits::placement::place_on_target(&o,args[2].trim_start_matches('@'),&opts.args,&t)?;
+            if args[0]=="place-qasm" {print!("{}",bennett_circuits::qasm::export_placed(&p)?);}else{println!("{}",p.annotations()?.to_jcs());}Ok(())
+        },
+        Some("schedule") => Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: §11 A consumer that does not implement the bound library rejects the schedule; unimplemented: unpublished expansion library b-isa-spec-8r4 (milestone 3)".into())),
+
         Some("check") if args.len() == 2 => {
             let report = load(&args[1])?.check()?;
             println!("{}", report_json(&report).to_jcs());

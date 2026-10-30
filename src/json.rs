@@ -33,11 +33,27 @@ impl Value {
         let mut p = Parser {
             bytes: text.as_bytes(),
             pos: 0,
+            decimals: false,
         };
         let v = p.value()?;
         p.ws();
         if p.pos != p.bytes.len() {
             bail!("JSON: trailing input at byte {}", p.pos);
+        }
+        Ok(v)
+    }
+
+    /// Target numbers retain their exact decimal text (§8.1).
+    pub fn parse_target(text: &str) -> Result<Value> {
+        let mut p = Parser {
+            bytes: text.as_bytes(),
+            pos: 0,
+            decimals: true,
+        };
+        let v = p.value()?;
+        p.ws();
+        if p.pos != p.bytes.len() {
+            bail!("JSON: trailing input");
         }
         Ok(v)
     }
@@ -149,6 +165,7 @@ fn write_jcs_string(s: &str, out: &mut String) {
 }
 
 struct Parser<'a> {
+    decimals: bool,
     bytes: &'a [u8],
     pos: usize,
 }
@@ -271,9 +288,42 @@ impl Parser<'_> {
             _ => bail!("JSON: bad number at byte {start}"),
         }
         if self.pos < self.bytes.len() && matches!(self.bytes[self.pos], b'.' | b'e' | b'E') {
-            bail!(
-                "JSON: non-integer number at byte {start} is outside the object-format subset (decimals are strings, §9.1)"
-            );
+            if !self.decimals {
+                bail!(
+                    "JSON: non-integer number at byte {start} is outside the object-format subset (decimals are strings, §9.1)"
+                );
+            }
+            if self.bytes.get(self.pos) == Some(&b'.') {
+                self.pos += 1;
+                let begin = self.pos;
+                while self.bytes.get(self.pos).is_some_and(u8::is_ascii_digit) {
+                    self.pos += 1;
+                }
+                if begin == self.pos {
+                    bail!("JSON: missing fractional digits");
+                }
+            }
+            if self
+                .bytes
+                .get(self.pos)
+                .is_some_and(|b| matches!(b, b'e' | b'E'))
+            {
+                self.pos += 1;
+                if self
+                    .bytes
+                    .get(self.pos)
+                    .is_some_and(|b| matches!(b, b'+' | b'-'))
+                {
+                    self.pos += 1;
+                }
+                let begin = self.pos;
+                while self.bytes.get(self.pos).is_some_and(u8::is_ascii_digit) {
+                    self.pos += 1;
+                }
+                if begin == self.pos {
+                    bail!("JSON: missing exponent digits");
+                }
+            }
         }
         let text = std::str::from_utf8(&self.bytes[start..self.pos])
             .expect("digits are utf8")

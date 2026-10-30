@@ -355,9 +355,11 @@ impl<'a> FnLower<'a> {
         own_controls: Vec<QubitRef>,
         targets: Vec<QubitRef>,
     ) -> Result<()> {
-        let mut controls = self.controls();
-        controls.extend(own_controls.into_iter().map(Ctrl::pos));
+        let own_count = own_controls.len();
+        let mut controls = own_controls.into_iter().map(Ctrl::pos).collect::<Vec<_>>();
+        controls.extend(self.controls());
         let inst = GateInst {
+            own_controls: own_count,
             gate,
             controls,
             targets,
@@ -478,6 +480,7 @@ impl<'a> FnLower<'a> {
         for (name, bits) in images.iter().rev() {
             for &i in bits {
                 self.circuit.body.push(Node::Gate(GateInst {
+                    own_controls: 0,
                     gate: BaseGate::X,
                     controls: Vec::new(),
                     targets: vec![QubitRef::new(name, i)],
@@ -923,6 +926,7 @@ impl<'a> FnLower<'a> {
         });
         for &i in &set_bits {
             self.circuit.body.push(Node::Gate(GateInst {
+                own_controls: 0,
                 gate: BaseGate::X,
                 controls: Vec::new(),
                 targets: vec![QubitRef::new(&physical, i)],

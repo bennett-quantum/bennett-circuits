@@ -593,3 +593,32 @@ finite acceptance suites does not close the remaining general checker and
 certificate obligations. Next is completion of those M2 obligations, then
 M3 placement/scheduling. No pushes, Dolt remote sync, external repository
 writes, or reference implementation source imports.
+
+## 2026-10-30 — M3 target placement implementation checkpoint
+
+Read the required accepted 0.8 contracts, header and read-only conformance
+D/G data. Red target API/export tests failed to compile; the new §8 loader,
+exact rational expression evaluator, own/effective control provenance, native
+matching, non-nesting schemes and default sequential placement now pass.
+Classes resolve in JCS order against live peak capacity. Scheme clean/dirty
+ancilla frames are separately tracked and reused across disjoint intervals;
+only native leaves are charged. Per-class peak and occupancy use time spans.
+Placed QASM carries source hierarchy, object/closure/target bindings, logical
+mapping, classes, events and source certificate verbatim. This is source proof
+material, **not a new §12 certificate** (M4); frame serialization remains 4fa.
+
+Red published D baseline: 0 pass / 7 fail / 5 unavailable. Exact action CLI
+state execution and adjoint reversal now give D **7/0/5**. G one-shot launch
+was also missing; added the existing CC executor's launch wrapper, COMPLETED
+reverse eligibility and CLOSED result. Maintained D/G CLI tests pass, along
+with target/placement/QASM tests (full gates pending). Initial target harness:
+**13 actions / 740 exact placed-versus-unplaced tuples / 0 divergences**.
+New scheme witness: controlled call/adjoint under H, 4 exact tuples, 8 native
+leaves, 3 peak wires, occupancy 22; no scheme-level double charge.
+
+Topology gap filed here as **bennett-circuits-b4k** (`isa-0.9`): §8.2 mentions
+"unless max_parallel or a topology is declared; all-to-all over logical wires"
+but §8.3 publishes no connectivity/topology/routing schema. The default is
+all-to-all; topology inputs refuse by bead. Supplied schedules still refuse
+with **b-isa-spec-8r4**, never invented generated ordinals. Further target
+coverage, full differentials, quality gates and final counts follow.

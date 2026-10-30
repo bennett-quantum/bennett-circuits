@@ -961,9 +961,35 @@ impl<'a> Machine<'a> {
 /// Execute a classical entry with retained reversible history. Options are the
 /// published diagnostic CLI's data inputs; no reference binary is invoked.
 pub fn run(object: &Object, name: &str, options: &[String], reverse: bool) -> Result<Value> {
+    run_inner(object, name, options, reverse, false)
+}
+pub fn launch(object: &Object, name: &str, options: &[String]) -> Result<Value> {
+    let reverse = options.iter().any(|o| o == "--reverse");
+    let options = options
+        .iter()
+        .filter(|o| o.as_str() != "--reverse")
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut v = run_inner(object, name, &options, reverse, true)?;
+    if let Value::Object(m) = &mut v {
+        m.insert("run_state".into(), Value::Str("CLOSED".into()));
+        m.insert("reversed".into(), Value::Bool(reverse));
+    }
+    Ok(v)
+}
+fn run_inner(
+    object: &Object,
+    name: &str,
+    options: &[String],
+    reverse: bool,
+    launch: bool,
+) -> Result<Value> {
     let f = object
         .function(name)
         .ok_or_else(|| Error("CC: unknown entry".into()))?;
+    if launch && f.kind != crate::object::FnKind::Cc {
+        bail!("E_ARG: §10 entry MUST be a CC launchable entry");
+    }
     let mut m = Machine::new(object)?;
     let mut inputs = vec![];
     let mut it = options.iter();
@@ -1002,7 +1028,7 @@ pub fn run(object: &Object, name: &str, options: &[String], reverse: bool) -> Re
         }
     }
     if inputs.len() != f.groups[0].len() {
-        bail!("CC: entry argument arity (§3.3)")
+        bail!("E_ARG: entry argument arity (§10; §3.3)")
     };
     let args = inputs
         .iter()
@@ -1040,6 +1066,9 @@ pub fn run(object: &Object, name: &str, options: &[String], reverse: bool) -> Re
             ]))
         })
         .collect::<Result<Vec<_>>>()?;
+    if launch && reverse && m.fault.is_some() {
+        bail!("E_INVALID_STATE: §10 reversal requires COMPLETED");
+    }
     if reverse && !m.frames.is_empty() {
         m.undo(0, m.frames.len() - 1)?;
         if m.state != m.entry {

@@ -140,6 +140,8 @@ impl BaseGate {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GateInst {
+    /// Own opcode controls, excluding predicate/call context (§8.1).
+    pub own_controls: usize,
     pub gate: BaseGate,
     pub controls: Vec<Ctrl>,
     pub targets: Vec<QubitRef>,
@@ -215,6 +217,7 @@ impl Node {
     pub fn adjoint(&self) -> Node {
         match self {
             Node::Gate(g) => Node::Gate(GateInst {
+                own_controls: g.own_controls,
                 gate: g.gate.adjoint(),
                 controls: g.controls.clone(),
                 targets: g.targets.clone(),
