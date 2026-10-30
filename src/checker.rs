@@ -1327,7 +1327,9 @@ pub fn validate(o: &Object) -> Result<()> {
             action_readonly(o, f)?;
             crate::selectors::validate(o, f)?;
             if !f.groups[3].is_empty() {
-                if f.groups[3].iter().all(|p| p.ty == Type::F64) {
+                if parameter_independent_action(o, f)? || composed_parameter_action(o, f)? {
+                    continue;
+                } else if f.groups[3].iter().all(|p| p.ty == Type::F64) {
                     symbolic_angle_action(o, f)?;
                 } else {
                     static_parameter_action(o, f)?;
@@ -1340,6 +1342,163 @@ pub fn validate(o: &Object) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Erase only parameters syntactically absent from this computation.
+/// This is universal quantification by independence, not execution at a
+/// chosen integer or token. Remaining angle atoms use the exact history proof.
+fn parameter_independent_action(o: &Object, f: &Function) -> Result<bool> {
+    let mut pending = vec![f];
+    let mut visited = BTreeSet::new();
+    while let Some(cf) = pending.pop() {
+        if !visited.insert(&cf.name) {
+            continue;
+        }
+        for i in all(cf) {
+            for a in &i.operands {
+                if let Operand::Sym(n) = a {
+                    if o.imports.iter().any(|import| import.name == *n) {
+                        return Ok(false);
+                    }
+                    if let Some(callee) = o.function(n) {
+                        pending.push(callee);
+                    }
+                }
+            }
+        }
+    }
+    let mut used = BTreeSet::new();
+    for i in all(f) {
+        for a in &i.operands {
+            match a {
+                Operand::Name(n) | Operand::Indexed(n, _) => {
+                    used.insert(n.as_str());
+                }
+                Operand::List(ns) => {
+                    used.extend(ns.iter().map(String::as_str));
+                }
+                _ => {}
+            }
+        }
+    }
+    if f.groups[3]
+        .iter()
+        .any(|p| p.ty != Type::F64 && used.contains(p.name.as_str()))
+    {
+        return Ok(false);
+    }
+    let mut independent = o.clone();
+    let cf = independent
+        .functions
+        .iter_mut()
+        .find(|cf| cf.name == f.name)
+        .unwrap();
+    cf.groups[3].retain(|p| p.ty == Type::F64 && used.contains(p.name.as_str()));
+    let cf = cf.clone();
+    if cf.groups[3].is_empty() {
+        let program = crate::lower::lower_program(&independent, &cf.name)?;
+        abstract_action(o, f, &program)?;
+    } else {
+        symbolic_angle_action(&independent, &cf)?;
+    }
+    Ok(true)
+}
+
+/// Composition of independently proved clean-workspace sections and opaque
+/// interface contracts. A section must return *all* its workspace before the
+/// next call; no assumption about that call's implementation enters the proof.
+fn composed_parameter_action(o: &Object, f: &Function) -> Result<bool> {
+    fn region_call(i: &Instr) -> bool {
+        let mut op = i.opcode.as_str();
+        let mut args = i.operands.as_slice();
+        while matches!(op, "ctl" | "adj") {
+            let offset = usize::from(op == "ctl");
+            let Some(Operand::Name(next)) = args.get(offset) else {
+                return false;
+            };
+            op = next;
+            args = &args[offset + 1..];
+        }
+        matches!(op, "oracle_call" | "action_call" | "qinplace")
+    }
+    if f.blocks.len() != 1 || !f.blocks[0].params.is_empty() {
+        return Ok(false);
+    }
+    let body = &f.blocks[0].instrs;
+    // Predicate/structured contexts crossing section boundaries require a
+    // joint symbolic state. Leave them to the general contract checker.
+    if !body.iter().any(region_call)
+        || body.iter().any(|i| {
+            matches!(i.opcode.as_str(), "qpred" | "qunpred")
+                || i.children
+                    .iter()
+                    .flatten()
+                    .any(|i| !i.children.is_empty() || region_call(i))
+        })
+    {
+        return Ok(false);
+    }
+    let mut sections: Vec<(bool, Vec<Instr>)> = Vec::new();
+    for i in body {
+        let call = region_call(i);
+        if !call && sections.last().is_some_and(|(c, _)| !c) {
+            sections.last_mut().unwrap().1.push(i.clone());
+        } else {
+            sections.push((call, vec![i.clone()]));
+        }
+    }
+    // Do not invent bounds for the original action: its literal loop list
+    // must agree before individual sections receive their own lists.
+    let loop_bounds = |cf: &Function| -> Result<Vec<u64>> {
+        all(cf)
+            .iter()
+            .filter(|i| i.opcode == "qloop")
+            .map(|i| {
+                i.operands
+                    .first()
+                    .ok_or_else(|| err("checker: qloop arity (§4.6)"))
+                    .and_then(int)
+            })
+            .collect()
+    };
+    if loop_bounds(f)? != f.bounds {
+        bail!("checker: action bounds differ from loop counts (§5.3)")
+    }
+    for (call, instructions) in sections {
+        let mut section = f.clone();
+        section.blocks[0].instrs = instructions;
+        section.bounds = loop_bounds(&section)?;
+        if !call {
+            let mut live = BTreeSet::new();
+            for i in all(&section) {
+                match i.opcode.as_str() {
+                    "qregion" => return Ok(false),
+                    "qalloc" | "qborrow" | "qcopy" | "qload" => live.extend(i.lhs.iter().cloned()),
+                    "qfree" | "qreturn" | "quncopy" | "qunload" => {
+                        if let Some(Operand::Name(n)) = i.operands.last() {
+                            live.remove(n);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !live.is_empty() {
+                return Ok(false);
+            }
+        }
+        let mut context = o.clone();
+        *context
+            .functions
+            .iter_mut()
+            .find(|cf| cf.name == f.name)
+            .unwrap() = section.clone();
+        if call {
+            static_parameter_action(&context, &section)?;
+        } else if !parameter_independent_action(&context, &section)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Angles are uninterpreted atoms here, not samples. The abstract gate

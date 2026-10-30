@@ -13,6 +13,15 @@
   checker tests pass, including the new unrelated-lproc regression.
 - This does not discharge overlapping cyclic invocations or general symbolic
   workspace/certificate obligations. pk3 and pk3.2 remain in progress.
+- Further red-green work proves workspace histories universally when integer /
+  token parameters are syntactically unused, including mixed symbolic angles.
+  Independently clean workspace sections compose with symbolic interface calls;
+  each section is fully proved before the opaque contract. Workspace spanning
+  a call remains an explicit §6 M2 proof gap, not an ill-formedness verdict.
+  Imported interface-only calls still need no body, including unused params.
+- Three additional hashed witnesses (unused token with valid/invalid workspace,
+  and workspace/call composition) agree with reference verdicts and citations:
+  **100 cumulative check comparisons / 0 divergences**; 35 checker tests pass.
 
 Milestone 1 (brief `docs/briefs/2026-10-29-circuits-milestone-1.md`), beads
 epic `bennett-circuits-q93` (tasks `.1`–`.5`). ISA 0.8 via the published spec

@@ -9,6 +9,12 @@ index space. Known labels survive moves/parmov/equal-arm selects. Check CLI
 agreement is now 97/0; 30 static checker tests pass. Full gates to be rerun
 after further work. Other M2 gaps below remain open.
 
+Symbolic-workspace extension now proves syntactically parameter-independent
+histories (integer/token, including mixed f64) and independent clean sections
+between symbolic interface calls. Workspace spanning a symbolic call still
+fails explicitly under §6 M2. Three further hashed CLI witnesses agree:
+latest cumulative check agreement **100/0**; 35 static checker tests pass.
+
 Commits this session:
 - c0221b5: non-permutation call-window events, wide domains, imported quantum
   signatures for CC calls.

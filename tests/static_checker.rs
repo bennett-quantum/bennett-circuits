@@ -468,6 +468,18 @@ fn new_cleanup_and_selector_witnesses_agree_with_reference() {
             "indirect-matched-cleanup",
             "oracle @id (x:wire in) (t:wire) (f:wire[4]) () ()\n^entry():\nlift.retval x\noracle @a (x:wire in) (t:wire) (f:wire[4]) () (tk:token)\nregs { r:reg[1], fr:reg[4], idx:reg[32], next:reg[32] }\n^entry():\nlift.oracle_call @id tk (x) r fr () ()\nidx = lift.label ^cleanup\nnext = lift.mov idx\nqjumpr next\n^cleanup():\nlift.oracle_uncall @id tk (x) r fr () ()\nlift.retval r\n",
         ),
+        (
+            "unused-token-workspace",
+            "action @a (t:wire mut) () () (tk:token) ()\n^entry():\nd = qcopy t\ns d\nquncopy t d\n",
+        ),
+        (
+            "unused-token-window",
+            "action @a (t:wire mut) () () (tk:token) ()\n^entry():\nd = qcopy t\nh t\nquncopy t d\n",
+        ),
+        (
+            "symbolic-call-workspace-sections",
+            "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\nd = qcopy x\ns d\nquncopy x d\noracle_call @o tk (x) t fr () ()\ne = qcopy t\ns e\nquncopy t e\n",
+        ),
     ] {
         let path = materialise(body, label);
         let ours = Object::parse(&std::fs::read_to_string(&path).unwrap()).and_then(|o| o.check());
@@ -700,6 +712,69 @@ fn symbolic_interface_calls_preserve_predicates_controls_and_literal_loop_contra
         e.0.contains("§3.3") && !e.0.contains("unimplemented"),
         "{e}"
     );
+}
+
+#[test]
+fn symbolic_workspace_is_proved_without_instantiating_unused_parameters() {
+    for params in ["n:i128", "tk:token", "n:i128, tk:token, theta:f64"] {
+        let body = format!(
+            "action @a (t:wire mut) () () ({params}) ()\n^entry():\nd = qcopy t\nz d\nquncopy t d\n"
+        )
+        .replace("z d", "s d");
+        generated(&body).hash().unwrap();
+        let bad = body.replace("s d", "h t");
+        let e = generated(&bad).hash().unwrap_err();
+        assert!(
+            e.0.contains("§6.2") && !e.0.contains("unimplemented"),
+            "{e}"
+        );
+    }
+    generated("action @a (t:wire mut) () () (tk:token, theta:f64) ()\n^entry():\nd = qalloc any 1\nh d\nh d\nqfree d\n").hash().unwrap();
+}
+
+#[test]
+fn symbolic_interface_calls_compose_with_independent_workspace_sections() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\n";
+    let body = format!(
+        "{prefix}action @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\nd = qcopy x\ns d\nquncopy x d\noracle_call @o tk (x) t fr () ()\ne = qcopy t\ns e\nquncopy t e\n"
+    );
+    generated(&body).hash().unwrap();
+    let bad = body.replace("s e", "h t");
+    let e = generated(&bad).hash().unwrap_err();
+    assert!(
+        e.0.contains("§6.2") && !e.0.contains("unimplemented"),
+        "{e}"
+    );
+}
+
+#[test]
+fn symbolic_interface_calls_do_not_bypass_declared_loop_bounds() {
+    let body = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\nregs {  } bounds {3}\n^entry():\nqloop 2 {\noracle_call @o tk (x) t fr () ()\n}\n";
+    let e = generated(body).hash().unwrap_err();
+    assert!(
+        e.0.contains("§5.3") && !e.0.contains("unimplemented"),
+        "{e}"
+    );
+}
+
+#[test]
+fn symbolic_workspace_spanning_an_opaque_call_stays_an_explicit_proof_gap() {
+    let body = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\nd = qcopy x\noracle_call @o tk (x) t fr () ()\nquncopy x d\n";
+    let e = generated(body).hash().unwrap_err();
+    assert!(
+        e.0.contains("unimplemented: §6") && e.0.contains("milestone 2"),
+        "{e}"
+    );
+}
+
+#[test]
+fn unused_symbolic_parameters_do_not_require_imported_interface_bodies() {
+    use bennett_circuits::object::Import;
+    let mut o = generated(
+        "action @a (t:wire mut) () () (unused:token) ()\n^entry():\naction_call @external (t) () () ()\n",
+    );
+    o.imports.push(Import{name:"external".into(),pinned_closure_hash:None,signature:Value::parse(r#"{"abi":"0.8","kind":"action","tier":"q","mut":[1],"in":[],"mem":[],"args":[],"bounds":[]}"#).unwrap()});
+    assert_eq!(o.hash().unwrap().status, "unlinked");
 }
 
 #[test]
