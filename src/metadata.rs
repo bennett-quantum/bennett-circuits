@@ -349,7 +349,7 @@ fn schedule(v: &Value) -> Result<()> {
                 }
                 if c["realisation"].as_str() == Some("recompute") {
                     bail!(
-                        "unimplemented: §6.4 recompute eligibility and cleanup schedule matching; requires unpublished expansion library b-isa-spec-8r4 (milestone 2)"
+                        "unimplemented: §6.4 recompute eligibility and cleanup schedule matching; requires unpublished expansion library b-isa-spec-8r4; decision bennett-circuits-yz8 (milestone 2)"
                     );
                 }
             }
@@ -915,7 +915,7 @@ fn certificate(v: &Value) -> Result<()> {
                     }
                     if e["realisation"].as_str() == Some("recompute") {
                         bail!(
-                            "unimplemented: §6.4 recompute eligibility and certificate cleanup matching; requires unpublished expansion library b-isa-spec-8r4 (milestone 2)"
+                            "unimplemented: §6.4 recompute eligibility and certificate cleanup matching; requires unpublished expansion library b-isa-spec-8r4; decision bennett-circuits-yz8 (milestone 2)"
                         );
                     }
                     point_path(&e["path"], p)?;
@@ -939,7 +939,9 @@ fn certificate(v: &Value) -> Result<()> {
             }
         }
         if r.contains_key("frame") {
-            bail!("unimplemented: §9.4 certificate frame descriptor schema (milestone 2)");
+            bail!(
+                "unimplemented: §9.4 certificate frame descriptor schema; decision bennett-circuits-4fa (milestone 2)"
+            );
         }
     }
     let comp = fields(

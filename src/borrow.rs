@@ -185,7 +185,7 @@ pub(crate) fn verify(
                 let expected = get(claim, "expected")?;
                 if expected.get("program").and_then(Value::as_str) != Some(closure) {
                     bail!(
-                        "unimplemented: §12 borrow expected-table/external-program replay (milestone 2)"
+                        "unimplemented: §12 borrow expected-table/external-program replay; decision bennett-circuits-4pf (milestone 2)"
                     );
                 }
                 // The expected program is this exact bound closure. Replaying
@@ -199,10 +199,12 @@ pub(crate) fn verify(
             Some("structural") => {
                 if claim.get("rule").and_then(Value::as_str) == Some("inverse_pair_library") {
                     bail!(
-                        "unimplemented: §12 borrow inverse-pair library replay; unpublished reference library b-isa-spec-8r4 (milestone 2)"
+                        "unimplemented: §12 borrow inverse-pair library replay; unpublished reference library b-isa-spec-8r4; decision bennett-circuits-4pf (milestone 2)"
                     )
                 }
-                bail!("unimplemented: §12 borrow library/structural claim replay (milestone 2)")
+                bail!(
+                    "unimplemented: §12 borrow library/structural claim replay; decision bennett-circuits-4pf (milestone 2)"
+                )
             }
             _ => return Err(error("borrow verification must reference a T3 proof")),
         }

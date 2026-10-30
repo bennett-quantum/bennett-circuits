@@ -1,5 +1,31 @@
 # bennett-circuits — progress
 
+## 2026-10-30 — M2 disposition; M3 authorised
+
+pk3/pk3.2 closed **by the requested disposition process**, not as a claim of
+a complete checker. The six-item table, exact spec questions, alternatives
+and costs are in `docs/design/2026-10-30-m2-open-proofs.md`.
+
+- (a) §5.5 overlapping cyclic invocations: minimum outstanding multiplicities
+  per operand signature and label state, monotone CFG fixed point. Matching
+  uncall pops one; ordinary read/delivery writes invalidate the sequence.
+  Red test reproduced the prior refusal; six correctly hashed CLI `check`
+  witnesses now agree, including two negative multiplicity/version cases
+  plus the over-cleanup case. Focused checker: 39 tests pass.
+- (b) Symbolic workspace/CFG `7bu` (design), opaque effects `z9r` (design),
+  broader certificate/imported inverse replay `4pf` (isa-0.9), frame schemas
+  `4fa` (isa-0.9), full inherited/recompute matching `yz8` (isa-0.9).
+  IDs have prefix `bennett-circuits-`; all errors name the owner. Library
+  paths still explicitly name **b-isa-spec-8r4**.
+- Check comparisons now **107 agree / 0 diverge** (101 baseline + 6 new).
+  This is not a count of distinct contents. Whole-suite verification follows
+  in the M3 checkpoint. No known reference disagreement.
+- M3 starts next with clean-workspace liveness reuse; target class resolution,
+  frame serialization and library-bound scheduling remain separate work.
+
+Earlier entries below are chronological checkpoints, superseded by this
+explicit user-authorised disposition. They do not reopen pk3/pk3.2.
+
 ## 2026-10-30 — latest M2 verification (after 0bfd28d)
 
 **M2 remains incomplete; pk3 and pk3.2 remain in progress. M3 unstarted.**

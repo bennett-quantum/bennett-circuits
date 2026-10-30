@@ -776,7 +776,10 @@ fn symbolic_workspace_spanning_an_opaque_call_stays_an_explicit_proof_gap() {
     let body = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\nd = qcopy x\noracle_call @o tk (x) t fr () ()\nquncopy x d\n";
     let e = generated(body).hash().unwrap_err();
     assert!(
-        e.0.contains("unimplemented: §6") && e.0.contains("milestone 2"),
+        e.0.contains("unimplemented: §6")
+            && e.0.contains("milestone 2")
+            && e.0.contains("bennett-circuits-7bu")
+            && e.0.contains("bennett-circuits-z9r"),
         "{e}"
     );
 }
@@ -856,4 +859,98 @@ fn inverse_library_borrow_claim_names_the_unpublished_contract_blocker() {
             && e.0.contains("milestone 2"),
         "{e}"
     );
+}
+
+#[test]
+fn overlapping_cyclic_invocations_match_multiplicity_and_current_versions() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (f:wire[4]) () ()\n^entry():\nlift.retval x\noracle @a (x:wire in) (t:wire) (f:wire[4]) () (tk:token)\nregs { r:reg[1], fr:reg[4] }\n^entry():\n";
+    let call = "lift.oracle_call @o tk (x) r fr () ()\n";
+    let uncall = "lift.oracle_uncall @o tk (x) r fr () ()\n";
+    let cases = [
+        (
+            "cyclic-latest",
+            format!(
+                "qjump ^again\n^again():\n{call}qbranch x ^again ^cleanup\n^cleanup():\n{uncall}lift.retval r\n"
+            ),
+            true,
+        ),
+        (
+            "cyclic-two-required",
+            format!(
+                "qjump ^again\n^again():\n{call}qbranch x ^again ^cleanup\n^cleanup():\n{uncall}{uncall}lift.retval r\n"
+            ),
+            false,
+        ),
+        (
+            "two-retained",
+            format!("{call}{call}{uncall}{uncall}lift.retval r\n"),
+            true,
+        ),
+        (
+            "three-required",
+            format!("{call}{call}{uncall}{uncall}{uncall}lift.retval r\n"),
+            false,
+        ),
+        (
+            "delivery-overwritten",
+            format!("{call}r = lift.mov x\n{uncall}lift.retval r\n"),
+            false,
+        ),
+        (
+            "retained-then-balanced-loop",
+            format!(
+                "{call}qjump ^again\n^again():\n{call}{uncall}qbranch x ^again ^cleanup\n^cleanup():\n{uncall}lift.retval r\n"
+            ),
+            true,
+        ),
+    ];
+    for (label, tail, valid) in cases {
+        let path = materialise(&format!("{prefix}{tail}"), label);
+        let reference = Command::new("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref")
+            .arg("check").arg(&path).output().unwrap();
+        assert_eq!(
+            reference.status.success(),
+            valid,
+            "{label}: {}",
+            String::from_utf8_lossy(&reference.stderr)
+        );
+        let ours = Object::parse(&std::fs::read_to_string(path).unwrap()).and_then(|o| o.check());
+        assert_eq!(ours.is_ok(), valid, "{label}: {ours:?}");
+        if let Err(e) = ours {
+            assert!(
+                e.0.contains("§5.5") && !e.0.contains("unimplemented"),
+                "{label}: {e}"
+            );
+        }
+    }
+    eprintln!("CYCLIC HARNESS: 6 check comparisons agree");
+}
+
+#[test]
+fn undecided_frame_and_replay_contracts_name_their_beads() {
+    for (field, value, bead) in [
+        ("frame", r#"{}"#, "bennett-circuits-4fa"),
+        (
+            "claims",
+            r#"[{"kind":"exhaustive","domain":{"bundles":[{"name":"t","width":1,"lo":"0","hi":"1"}],"borrowed":[{"name":"b","width":1,"lo":"0","hi":"1"}],"regions":[]},"expected":{"table":[]}}]"#,
+            "bennett-circuits-4pf",
+        ),
+    ] {
+        let mut o = generated(
+            "perm_action @a (t:wire mut) () () () ()\n^entry():\nb = qborrow any 1\nswap b t\nswap b t\nqreturn b\n",
+        );
+        with_borrow_certificate(&mut o, false, false);
+        let Value::Object(cert) = o.certificate.as_mut().unwrap() else {
+            panic!()
+        };
+        let Value::Object(regions) = cert.get_mut("regions").unwrap() else {
+            panic!()
+        };
+        let Value::Object(region) = regions.values_mut().next().unwrap() else {
+            panic!()
+        };
+        region.insert(field.into(), Value::parse(value).unwrap());
+        let e = o.hash().unwrap_err();
+        assert!(e.0.contains("unimplemented:") && e.0.contains(bead), "{e}");
+    }
 }

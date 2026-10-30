@@ -701,35 +701,60 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
         labels.insert(b.name.as_str(), offset);
         offset += b.instrs.len();
     }
-    // A state retains the computing program point, so reaching two different
-    // invocations through a join never conflates their dynamic identities.
-    // Separate path states preserve correlations at joins; balanced loops
-    // converge to the identical incoming state.
-    type State = BTreeMap<usize, bool>; // call point -> invalidated read version
-    // A label is an abstract index, not a guessed numeric address. Keep it
-    // path-sensitive along with pending invocations, so an indirect jump
-    // through a copied label does not invent paths back into its producer.
+    // Identical operands denote a stack of dynamically distinct invocations.
+    // Calls push, uncalls pop, and the remainder is retained for prefix reversal
+    // (§5.5). Keep the minimum available stack depth on every incoming path.
+    // Updates are monotone (push, pop, or invalidation), so componentwise minima
+    // suffice for safety; no unbounded stack or iteration cutoff is required.
+    let calls = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, i)| i.opcode == "lift.oracle_call")
+        .map(|(pc, _)| pc)
+        .collect::<Vec<_>>();
+    let mut keys: Vec<usize> = Vec::new();
+    for pc in calls {
+        if !keys.iter().any(|k| rows[*k].operands == rows[pc].operands) {
+            keys.push(pc);
+        }
+    }
     type Labels = BTreeMap<String, usize>;
-    let mut work = vec![(0usize, State::new(), Labels::new())];
-    let mut seen = BTreeSet::new();
+    let mut work = vec![(0usize, vec![0usize; keys.len()], Labels::new())];
+    let mut incoming: BTreeMap<(usize, Labels), Vec<usize>> = BTreeMap::new();
     while let Some((pc, mut pending, mut values)) = work.pop() {
-        if pc >= rows.len() || !seen.insert((pc, pending.clone(), values.clone())) {
+        if pc >= rows.len() {
             continue;
         }
-        let i = rows[pc];
-        if i.opcode == "lift.oracle_uncall" {
-            let pos = pending
-                .keys()
-                .rev()
-                .find(|p| rows[**p].operands == i.operands)
-                .copied()
-                .ok_or_else(|| {
-                    err("checker: unmatched lifted oracle cleanup on an incoming path (§5.5)")
-                })?;
-            if pending[&pos] {
-                bail!("checker: lifted oracle read version changed before cleanup (§5.5)");
+        let state_key = (pc, values.clone());
+        if let Some(previous) = incoming.get_mut(&state_key) {
+            let mut changed = false;
+            for (old, new) in previous.iter_mut().zip(&pending) {
+                if new < old {
+                    *old = *new;
+                    changed = true;
+                }
             }
-            pending.remove(&pos);
+            if !changed {
+                continue;
+            }
+            pending.clone_from(previous);
+        } else {
+            incoming.insert(state_key, pending.clone());
+        }
+        let i = rows[pc];
+        let delivery = matches!(i.opcode.as_str(), "lift.oracle_call" | "lift.oracle_uncall");
+        let own_key = delivery
+            .then(|| keys.iter().position(|k| rows[*k].operands == i.operands))
+            .flatten();
+        if i.opcode == "lift.oracle_uncall" {
+            let k =
+                own_key.ok_or_else(|| err("checker: unmatched lifted oracle cleanup (§5.5)"))?;
+            if pending[k] == 0 {
+                bail!(
+                    "checker: unmatched lifted oracle cleanup or changed read/delivery version on an incoming path (§5.5)"
+                );
+            }
+            pending[k] -= 1;
         }
         let mut written = i.lhs.iter().cloned().collect::<BTreeSet<_>>();
         if matches!(i.opcode.as_str(), "lift.oracle_call" | "lift.oracle_uncall") {
@@ -749,7 +774,7 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
                     _ => true,
                 }
             || i.opcode == "lift.perm_call" && writes_memory(o, &f.name, &mut BTreeSet::new());
-        for (p, dirty) in &mut pending {
+        for (k, p) in keys.iter().enumerate() {
             let call = rows[*p];
             let Operand::List(ins) = &call.operands[2] else {
                 unreachable!()
@@ -757,7 +782,18 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
             let Operand::List(mems) = &call.operands[5] else {
                 unreachable!()
             };
-            *dirty |= ins.iter().any(|n| written.contains(n)) || memory && !mems.is_empty();
+            // Matching deliveries implement the push/pop above. Other writes
+            // cannot stand in for a successor version of that computing call.
+            let outputs_changed = Some(k) != own_key
+                && [3, 4]
+                    .iter()
+                    .any(|j| opname(&call.operands[*j]).is_ok_and(|n| written.contains(n)));
+            if ins.iter().any(|n| written.contains(n))
+                || memory && !mems.is_empty()
+                || outputs_changed
+            {
+                pending[k] = 0;
+            }
         }
         let read_label = |a: &Operand| match a {
             Operand::Name(n) => values.get(n).copied(),
@@ -785,10 +821,11 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
                 values.insert(name.clone(), value);
             }
         }
-        if i.opcode == "lift.oracle_call" && pending.insert(pc, false).is_some() {
-            bail!(
-                "unimplemented: §5.5 overlapping dynamic invocations at a cyclic call point (milestone 2)"
-            );
+        if i.opcode == "lift.oracle_call" {
+            let k = own_key.expect("call has its own signature key");
+            pending[k] = pending[k]
+                .checked_add(1)
+                .ok_or_else(|| err("host limit: invocation depth exceeds usize (§5.5)"))?;
         }
         let mut successors = Vec::new();
         match i.opcode.as_str() {
@@ -935,7 +972,7 @@ fn abstract_action(o: &Object, f: &Function, p: &Program) -> Result<()> {
                 .any(|n| matches!(n,Node::Call{controls,..}if !controls.is_empty())))
     {
         bail!(
-            "unimplemented: §6.4 inherited-control cleanup schedule key validation; generated-operation matching requires unpublished expansion library b-isa-spec-8r4 (milestone 2)"
+            "unimplemented: §6.4 inherited-control cleanup schedule key validation; generated-operation matching requires unpublished expansion library b-isa-spec-8r4; decision bennett-circuits-yz8 (milestone 2)"
         );
     }
     validate_pairs(p)?;
@@ -1785,7 +1822,9 @@ fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
         Ok(())
     }
     if f.blocks.len() != 1 || !f.blocks[0].params.is_empty() {
-        bail!("unimplemented: §6 symbolic action CFG validation (milestone 2)")
+        bail!(
+            "unimplemented: §6 symbolic action CFG validation; decision bennett-circuits-7bu (milestone 2)"
+        )
     }
     let mut calls = Vec::new();
     prepare(&f.blocks[0].instrs, &names, &[], &mut calls)?;
@@ -1879,7 +1918,7 @@ fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
                         bail!("checker: qinplace oracle symbol (§4.5)")
                     };
                     let cf = o.function(n).ok_or_else(|| {
-                        err("unimplemented: qinplace imported inverse contract (milestone 2)")
+                        err("unimplemented: qinplace imported inverse contract; decision bennett-circuits-4pf (milestone 2)")
                     })?;
                     if cf.kind != FnKind::Oracle
                         || cf.groups[0].len() != 1
@@ -1925,7 +1964,7 @@ fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
                 }
             }
             _ => bail!(
-                "unimplemented: §6 symbolic classical action validation for {} (milestone 2)",
+                "unimplemented: §6 symbolic classical action validation for {}; decisions bennett-circuits-7bu and bennett-circuits-z9r (milestone 2)",
                 i.opcode
             ),
         }
