@@ -142,6 +142,7 @@ Call pushes and uncall pops are monotone, as is invalidation by writes; a
 positive minimum proves a matching invocation on *every* incoming path.
 Increasing loop counts do not force unbounded enumeration; a previously seen
 smaller count subsumes them. Ordinary writes invalidate read/delivery versions;
-matching deliveries preserve stack multiplicity. Six materialised, correctly
+XOR deliveries preserve stack multiplicity and commute for different input
+signatures when those inputs stay current. Ten materialised, correctly
 hashed witnesses agree with the reference's `check`, including negative
 version and over-cleanup cases. No reference code was copied or linked.

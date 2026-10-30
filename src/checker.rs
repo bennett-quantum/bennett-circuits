@@ -782,9 +782,10 @@ fn matched_cleanup(o: &Object, f: &Function) -> Result<()> {
             let Operand::List(mems) = &call.operands[5] else {
                 unreachable!()
             };
-            // Matching deliveries implement the push/pop above. Other writes
-            // cannot stand in for a successor version of that computing call.
-            let outputs_changed = Some(k) != own_key
+            // Oracle deliveries XOR into target/fault, so other deliveries
+            // commute when their inputs stay current. They are successor
+            // versions, unlike an ordinary overwrite of a delivered outcome.
+            let outputs_changed = !delivery
                 && [3, 4]
                     .iter()
                     .any(|j| opname(&call.operands[*j]).is_ok_and(|n| written.contains(n)));

@@ -863,7 +863,7 @@ fn inverse_library_borrow_claim_names_the_unpublished_contract_blocker() {
 
 #[test]
 fn overlapping_cyclic_invocations_match_multiplicity_and_current_versions() {
-    let prefix = "oracle @o (x:wire in) (t:wire) (f:wire[4]) () ()\n^entry():\nlift.retval x\noracle @a (x:wire in) (t:wire) (f:wire[4]) () (tk:token)\nregs { r:reg[1], fr:reg[4] }\n^entry():\n";
+    let prefix = "oracle @o (x:wire in) (t:wire) (f:wire[4]) () ()\n^entry():\nlift.retval x\noracle @a (x:wire in) (t:wire) (f:wire[4]) () (tk:token)\nregs { r:reg[1], fr:reg[4], v:reg[1] }\n^entry():\n";
     let call = "lift.oracle_call @o tk (x) r fr () ()\n";
     let uncall = "lift.oracle_uncall @o tk (x) r fr () ()\n";
     let cases = [
@@ -903,6 +903,37 @@ fn overlapping_cyclic_invocations_match_multiplicity_and_current_versions() {
             ),
             true,
         ),
+        (
+            "mixed-invocations",
+            format!(
+                "{call}v = lift.xor x x\n{}{uncall}{}lift.retval r\n",
+                call.replace("(x)", "(v)"),
+                uncall.replace("(x)", "(v)")
+            ),
+            true,
+        ),
+        (
+            "mixed-retained",
+            format!(
+                "{call}v = lift.xor x x\n{}{uncall}lift.retval r\n",
+                call.replace("(x)", "(v)")
+            ),
+            true,
+        ),
+        (
+            "mixed-inverse-order",
+            format!(
+                "{call}v = lift.xor x x\n{}{}{uncall}lift.retval r\n",
+                call.replace("(x)", "(v)"),
+                uncall.replace("(x)", "(v)")
+            ),
+            true,
+        ),
+        (
+            "fault-delivery-overwritten",
+            format!("{call}fr = lift.const.i4 0\n{uncall}lift.retval r\n"),
+            false,
+        ),
     ];
     for (label, tail, valid) in cases {
         let path = materialise(&format!("{prefix}{tail}"), label);
@@ -923,7 +954,7 @@ fn overlapping_cyclic_invocations_match_multiplicity_and_current_versions() {
             );
         }
     }
-    eprintln!("CYCLIC HARNESS: 6 check comparisons agree");
+    eprintln!("CYCLIC HARNESS: 10 check comparisons agree");
 }
 
 #[test]

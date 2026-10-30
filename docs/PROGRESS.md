@@ -9,7 +9,7 @@ and costs are in `docs/design/2026-10-30-m2-open-proofs.md`.
 - (a) §5.5 overlapping cyclic invocations: minimum outstanding multiplicities
   per operand signature and label state, monotone CFG fixed point. Matching
   uncall pops one; ordinary read/delivery writes invalidate the sequence.
-  Red test reproduced the prior refusal; six correctly hashed CLI `check`
+  Red test reproduced the prior refusal; ten correctly hashed CLI `check`
   witnesses now agree, including two negative multiplicity/version cases
   plus the over-cleanup case. Focused checker: 39 tests pass.
 - (b) Symbolic workspace/CFG `7bu` (design), opaque effects `z9r` (design),
@@ -17,7 +17,11 @@ and costs are in `docs/design/2026-10-30-m2-open-proofs.md`.
   `4fa` (isa-0.9), full inherited/recompute matching `yz8` (isa-0.9).
   IDs have prefix `bennett-circuits-`; all errors name the owner. Library
   paths still explicitly name **b-isa-spec-8r4**.
-- Check comparisons now **107 agree / 0 diverge** (101 baseline + 6 new).
+- Follow-up red/green: distinct XOR oracle deliveries commute on shared
+  target/fault slots when inputs stay current. Four more CLI checks cover
+  mixed signatures, either cleanup order, retention, and fault overwrite.
+  Ordinary overwrites still invalidate pending deliveries.
+- Check comparisons now **111 agree / 0 diverge** (101 baseline + 10 new).
   This is not a count of distinct contents. Whole-suite verification follows
   in the M3 checkpoint. No known reference disagreement.
 - M3 starts next with clean-workspace liveness reuse; target class resolution,
