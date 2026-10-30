@@ -43,3 +43,13 @@ Suite A now passes 21/0/0 using implemented run-cc and classical reverse
 commands; tests/diagnostics.rs retains the published acceptance probes.
 Independent CC/R history uses delta undo and marks cancelled segments.
 B reverse/step-check and the remaining symbolic/certificate work stay M2.
+
+Latest: A 21/0/0, B 35/0/0, F 33/0/2 (pass/fail/unavailable). Oracle reverse
+checks the circuit prefix's inverse; step-check independently evaluates rows
+against circuits across tiny's full 512-element domain. General row support
+and sampling have explicit M2 errors. Symbolic f64-only actions now use
+uninterpreted tags for exact adjoint checking. Borrow translation frames
+are split at non-permutation boundaries; the new positive agrees with ref.
+M2 is not complete: integer/count/token symbolic actions, complete imported
+provenance/cert-library replay, cyclic/indirect matched-cleanup and remaining
+schema/context audit obligations remain. Do not close pk3 or pk3.2 yet.

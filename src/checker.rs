@@ -1154,10 +1154,30 @@ fn translation_frame(flat: &Flat, b: &BTreeSet<usize>) -> Result<()> {
             .chain(g.controls.iter().map(|(q, _)| q))
             .any(|q| b.contains(q))
     };
-    let first = flat.gates.iter().position(touches);
+    let mut start = 0;
+    for end in 0..=flat.gates.len() {
+        if end < flat.gates.len() && matches!(flat.gates[end].gate, BaseGate::X | BaseGate::Swap) {
+            continue;
+        }
+        if end < flat.gates.len() && touches(&flat.gates[end]) {
+            bail!("checker: non-permutation instruction touches borrowed wires (§5.6)");
+        }
+        translation_component(&flat.gates[start..end], b)?;
+        start = end + 1;
+    }
+    Ok(())
+}
+fn translation_component(gates: &[FlatGate], b: &BTreeSet<usize>) -> Result<()> {
+    let touches = |g: &FlatGate| {
+        g.targets
+            .iter()
+            .chain(g.controls.iter().map(|(q, _)| q))
+            .any(|q| b.contains(q))
+    };
+    let first = gates.iter().position(touches);
     let Some(first) = first else { return Ok(()) };
-    let last = flat.gates.iter().rposition(touches).unwrap();
-    let frame = &flat.gates[first..=last];
+    let last = gates.iter().rposition(touches).unwrap();
+    let frame = &gates[first..=last];
     if frame.iter().any(|g| g.gate != BaseGate::X) {
         bail!("checker: borrow frame must use X-family flips (§5.6)")
     }
@@ -1258,7 +1278,11 @@ pub fn validate(o: &Object) -> Result<()> {
             action_readonly(o, f)?;
             crate::selectors::validate(o, f)?;
             if !f.groups[3].is_empty() {
-                static_parameter_action(o, f)?;
+                if f.groups[3].iter().all(|p| p.ty == Type::F64) {
+                    symbolic_angle_action(o, f)?;
+                } else {
+                    static_parameter_action(o, f)?;
+                }
                 continue;
             }
             let p = crate::lower::lower_program(o, &f.name)
@@ -1267,6 +1291,38 @@ pub fn validate(o: &Object) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Angles are uninterpreted atoms here, not samples. The abstract gate
+/// transfer uses only syntactic angle equality/negation, never trig or a
+/// numerical identity. Encode distinct atoms in collision-free f64 tags so
+/// the existing IR can carry them through calls and adjoints. Tags are never
+/// simulated, exported, or used for bounds/circuit control decisions.
+fn symbolic_angle_action(o: &Object, f: &Function) -> Result<()> {
+    let mut forbidden = BTreeSet::new();
+    for cf in &o.functions {
+        for i in all(cf) {
+            for a in &i.operands {
+                if let Operand::Float(s) | Operand::Int(s) = a
+                    && let Ok(v) = s.parse::<f64>()
+                {
+                    forbidden.insert(v.abs().to_bits());
+                }
+            }
+        }
+    }
+    let mut tag = 1f64;
+    let mut args = Vec::new();
+    for _ in &f.groups[3] {
+        while forbidden.contains(&tag.to_bits()) {
+            tag += 1.;
+        }
+        args.push(crate::oracle::Argument::Float(tag));
+        forbidden.insert(tag.to_bits());
+        tag += 1.;
+    }
+    let p = crate::lower::lower_program_with_args(o, &f.name, &args)?;
+    abstract_action(o, f, &p)
 }
 
 fn action_readonly(o: &Object, f: &Function) -> Result<()> {

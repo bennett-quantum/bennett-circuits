@@ -11,13 +11,28 @@ fn contains(actual: &Value, expected: &Value) -> bool {
 }
 #[test]
 fn suite_a_execution_and_reversal() {
+    acceptance("A", |_| true);
+}
+#[test]
+fn suite_b_prefix_reversal_and_step_check() {
+    acceptance("B", |c| {
+        matches!(
+            c.get("command").unwrap().as_array().unwrap()[0].as_str(),
+            Some("reverse" | "step-check")
+        )
+    });
+}
+fn acceptance(suite: &str, include: impl Fn(&Value) -> bool) {
     let cases = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("bennett-isa-spec/conformance/cases/A");
+        .join(format!("bennett-isa-spec/conformance/cases/{suite}"));
     for entry in std::fs::read_dir(cases).unwrap() {
         let dir = entry.unwrap().path();
         let c = Value::parse(&std::fs::read_to_string(dir.join("case.json")).unwrap()).unwrap();
+        if !include(&c) {
+            continue;
+        }
         let object = dir.join(c.get("object").unwrap().as_str().unwrap());
         let args = c
             .get("command")

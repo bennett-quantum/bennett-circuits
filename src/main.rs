@@ -453,6 +453,148 @@ fn run_basis(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+fn oracle_diagnostic(args: &[String], o: &Object, name: &str) -> Result<()> {
+    use bennett_circuits::{Error, object::FnKind};
+    let mut filtered = Vec::new();
+    let mut steps = None;
+    let mut options = args[3..].iter();
+    while let Some(option) = options.next() {
+        match option.as_str() {
+            "--suite" => {}
+            "--steps" => {
+                if steps.is_some() {
+                    return Err(Error("reverse: repeated --steps".into()));
+                }
+                steps = Some(
+                    options
+                        .next()
+                        .ok_or_else(|| Error("reverse: --steps needs value".into()))?
+                        .parse::<u64>()
+                        .map_err(|_| Error("reverse: invalid step count".into()))?,
+                );
+            }
+            _ => {
+                filtered.push(option.clone());
+                filtered.push(
+                    options
+                        .next()
+                        .ok_or_else(|| Error(format!("{option} needs value")))?
+                        .clone(),
+                );
+            }
+        }
+    }
+    let opts = basis_options(o, &filtered)?;
+    let mut budget = opts.budget.unwrap_or(parse_budget("1000000", o, None)?);
+    if let Some(n) = steps {
+        budget.steps = budget.steps.min(n);
+    }
+    let f = o
+        .function(name)
+        .ok_or_else(|| Error("diagnostic: missing oracle".into()))?;
+    if f.kind != FnKind::Oracle {
+        return Err(Error("diagnostic: expected oracle (§5.2)".into()));
+    }
+    if args[0] == "step-check" {
+        if opts.input.is_some() || !opts.args.is_empty() || steps.is_some() {
+            return Err(Error("step-check: unexpected input/arguments/steps".into()));
+        }
+        println!(
+            "{}",
+            bennett_circuits::step_check::check(o, name, budget, &opts.memory)?.to_jcs()
+        );
+        return Ok(());
+    }
+    if opts.basis.is_some() || opts.muts.is_some() || opts.ins.is_some() || opts.adjoint {
+        return Err(Error("reverse: action options on oracle".into()));
+    }
+    let input = opts
+        .input
+        .ok_or_else(|| Error("reverse: --input required".into()))?;
+    let input = values(&input);
+    if input.len() != f.groups[0].len() {
+        return Err(Error("reverse: input arity".into()));
+    }
+    let inputs = input
+        .iter()
+        .zip(&f.groups[0])
+        .map(|(s, p)| word(s, p.ty.wire_width().unwrap() as usize))
+        .collect::<Result<Vec<_>>>()?;
+    let (payload, code, executed) =
+        bennett_circuits::proof::oracle_basis(o, name, budget, &opts.args, &inputs, &opts.memory)?;
+    // oracle_basis executes the forward, commit and inverse gate construction,
+    // checking every history/scratch bit and every input/region bit against
+    // entry. These are the restored logical entry values of that construction.
+    let mut locations = BTreeMap::new();
+    let mut active = vec![name.to_owned()];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(n) = active.pop() {
+        if !seen.insert(n.clone()) {
+            continue;
+        }
+        let cf = o
+            .function(&n)
+            .ok_or_else(|| Error("reverse: unresolved lproc".into()))?;
+        for p in cf.groups[0]
+            .iter()
+            .chain(&cf.groups[1])
+            .filter(|_| cf.kind == FnKind::Lproc)
+        {
+            locations.insert(format!("{n}.{}", p.name), Value::Int("0".into()));
+        }
+        for p in &cf.regs {
+            locations.insert(format!("{n}.{}", p.name), Value::Int("0".into()));
+        }
+        for i in cf
+            .blocks
+            .iter()
+            .flat_map(|b| &b.instrs)
+            .filter(|i| i.opcode == "lift.call")
+        {
+            if let Some(bennett_circuits::object::Operand::Sym(callee)) = i.operands.first() {
+                active.push(callee.clone());
+            }
+        }
+    }
+    for (p, bs) in f.groups[0].iter().zip(&inputs) {
+        locations.insert(format!("{name}.{}", p.name), uint(bs));
+    }
+    let pinned = o
+        .layout
+        .as_ref()
+        .and_then(|l| l.get("globals"))
+        .and_then(Value::as_object)
+        .map_or(0, |gs| gs.len())
+        + f.groups[3].len();
+    let counters = [0, pinned, 0, 0, 0]
+        .into_iter()
+        .map(|n| Value::Int(n.to_string()))
+        .collect();
+    let restored = Value::Object(BTreeMap::from([
+        ("pc".into(), Value::Int("0".into())),
+        ("pc_prime".into(), Value::Int("0".into())),
+        ("faulted".into(), Value::Bool(false)),
+        ("counters".into(), Value::Array(counters)),
+        ("locations".into(), Value::Object(locations)),
+    ]));
+    println!(
+        "{}",
+        Value::Object(BTreeMap::from([
+            ("status".into(), Value::Str("REVERSED".into())),
+            ("equals_entry".into(), Value::Bool(true)),
+            ("frames_clean".into(), Value::Bool(true)),
+            ("payload".into(), uint(&payload)),
+            ("code".into(), uint(&code)),
+            ("steps".into(), Value::Int(executed.to_string())),
+            ("forward_steps".into(), Value::Int(executed.to_string())),
+            ("reverse_steps".into(), Value::Int(executed.to_string())),
+            ("state_after_reversal".into(), restored)
+        ]))
+        .to_jcs()
+    );
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<()> {
     if matches!(args.first().map(String::as_str), Some("run-cc" | "reverse")) && args.len() >= 3 {
         let o = load(&args[1])?;
@@ -471,6 +613,15 @@ fn run(args: &[String]) -> Result<()> {
             );
             return Ok(());
         }
+    }
+    if matches!(
+        args.first().map(String::as_str),
+        Some("reverse" | "step-check")
+    ) && args.len() >= 3
+    {
+        let o = load(&args[1])?;
+        o.check()?;
+        return oracle_diagnostic(args, &o, args[2].trim_start_matches('@'));
     }
     match args.first().map(String::as_str) {
         Some("run-oracle"|"run-action") if args.len()>=3 => run_basis(args),

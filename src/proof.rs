@@ -136,6 +136,9 @@ fn oracle_basis_prefix(
         bail!("oracle executor: unknown memory region")
     }
     let result = basis(&flat, &input)?;
+    if result[n + fw + probes..] != input[n + fw + probes..] {
+        bail!("oracle executor: input or memory not restored by prefix reversal (§5.2)");
+    }
     let steps = result[n + fw..n + fw + probes]
         .iter()
         .filter(|b| **b)

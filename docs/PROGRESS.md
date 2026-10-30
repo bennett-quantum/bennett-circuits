@@ -362,3 +362,29 @@ No observed reference disagreement, so no deciding-spec divergence to report.
   diagnostic state uses binary64 amplitudes; it is not a certificate checker
   or rigorous numerical proof. Unsupported entry/call argument types fail
   explicitly rather than being coerced. This does not complete M2.
+
+## 2026-10-30 — B acceptance, symbolic angles, borrow-frame boundaries
+
+- Oracle reverse diagnostics execute the compiled forward/commit/inverse
+  construction, checking every workspace bit and restoration of all inputs
+  and regions before reporting the restored logical entry tuple. Explicit
+  --steps selects a prefix under the supplied budget. No reference process
+  is used by production commands.
+- Independent direct row evaluator for step-check (arithmetic, casts,
+  comparisons, branches, address/load/boundscheck, fault and retval) is
+  compared against the compiled circuit on the full <=16-bit free domain.
+  Unsupported rows/widths/large-domain sampling fail explicitly. Tiny checks
+  all 512 input/memory configurations. This is diagnostic evidence, not a
+  certificate, and broader direct-machine support remains staged.
+- Published B: **35 pass / 0 fail / 0 unavailable**, exit 0. F: **33 pass /
+  0 fail / 2 unavailable**, exit 2 (unchanged external missing probes for
+  frame live ranges and linking). A: **21/0/0**, exit 0.
+- Red-green symbolic f64 action checking uses distinct collision-free
+  uninterpreted angle tags and exact equality/negation only; no trigonometric
+  evaluation or numerical sampling occurs. Exact call-adjoint workspace
+  histories accept for every argument; mismatched symbolic angles reject.
+  General integer/count/token parameterized action checking remains open.
+- Red-green borrow translation lemma now checks each maximal contiguous
+  permutation-only component separately. Two valid frames separated by H
+  on a non-borrowed wire accept; H on B rejects. The correctly hashed
+  positive witness agrees with reference CLI (95 documented comparisons).

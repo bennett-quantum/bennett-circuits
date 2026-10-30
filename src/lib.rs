@@ -18,6 +18,7 @@ pub mod proof;
 pub mod qasm;
 mod selectors;
 pub mod sha256;
+pub mod step_check;
 
 /// Crate version string.
 pub fn version() -> &'static str {

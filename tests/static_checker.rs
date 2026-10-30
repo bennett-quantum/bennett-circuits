@@ -515,3 +515,46 @@ fn nonpermutation_call_closes_dependency_window_even_for_identity_body() {
         .expect_err("opaque non-permutation call must close the window");
     assert!(e.0.contains("§6.2"), "{e}");
 }
+
+#[test]
+fn symbolic_angles_validate_exact_adjoint_histories_for_all_arguments() {
+    let prefix = "action @rot (x:wire mut) () () (theta:f64) ()\n^entry():\nrx theta x\n";
+    let good = format!(
+        "{prefix}action @a (t:wire mut) () () (alpha:f64, beta:f64) ()\n^entry():\nd = qalloc any 1\naction_call @rot (d) () () (alpha)\nadj action_call @rot (d) () () (alpha)\nqfree d\n"
+    );
+    generated(&good).hash().unwrap();
+    for bad in [
+        good.replace(
+            "adj action_call @rot (d) () () (alpha)",
+            "adj action_call @rot (d) () () (beta)",
+        ),
+        good.replace("qfree d", "s t\nqfree d")
+            .replace("adj action_call @rot (d) () () (alpha)\n", ""),
+    ] {
+        let e = generated(&bad).hash().unwrap_err();
+        assert!(
+            e.0.contains("§6.2") && !e.0.contains("unimplemented"),
+            "{e}"
+        );
+    }
+}
+
+#[test]
+fn translation_lemma_is_checked_per_maximal_permutation_frame() {
+    let frame = "cx x b\ncx b y\ncx x b\ncx b y\n";
+    let body = format!(
+        "action @a (y:wire mut, t:wire mut) (x:wire in) () () ()\n^entry():\nb = qborrow any 1\n{frame}h t\n{frame}qreturn b\n"
+    );
+    generated(&body).hash().unwrap();
+    let path = materialise(&body, "separated-borrow-frames");
+    let reference = Command::new("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref")
+        .arg("check").arg(path).output().unwrap();
+    assert!(
+        reference.status.success(),
+        "reference disagrees with §5.6 maximal contiguous permutation-only frames: {}",
+        String::from_utf8_lossy(&reference.stderr)
+    );
+    let bad = body.replace("h t", "h b");
+    let e = generated(&bad).hash().unwrap_err();
+    assert!(e.0.contains("§5.6"), "{e}");
+}
