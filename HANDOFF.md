@@ -1,3 +1,9 @@
+State (2026-10-30 ~14:30Z, maintainer pause): M4 (proof-carrying output under the maintainer-ratified proof
+contracts: histories proof IR, pending obligations for opaque imports, closure registry, positional tuple tables,
+typed-record frames) started by one sol implementer: foundation c9c264e plus checkpoint 3a12d9e (164 tests green, may
+be mid-feature); resume from docs/PROGRESS.md and docs/briefs/2026-10-30-circuits-m4.md. Library-gated paths keep
+refusing on b-isa-spec-8r4 until the ref catalog is published. Read ../bennett/HANDOFF.md first.
+
 State 2026-10-30: M1 complete; M2 closed by disposition at b4b28ac;
 M3 target/default scheduling implementation landed at fe8f37f + 4025a21,
 with final verification followup. M3 1ud stays open on publication dependencies.
