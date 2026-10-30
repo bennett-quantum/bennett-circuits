@@ -17,8 +17,8 @@ pub enum Value {
     Int(String),
     Str(String),
     Array(Vec<Value>),
-    /// Keys unique; `BTreeMap` byte order is the JCS key order for the
-    /// ASCII keys the spec uses.
+    /// Keys unique. Serialization sorts by UTF-16 code units (RFC 8785),
+    /// including non-ASCII user keys.
     Object(BTreeMap<String, Value>),
 }
 
@@ -68,7 +68,9 @@ impl Value {
             }
             Value::Object(map) => {
                 out.push('{');
-                for (i, (k, v)) in map.iter().enumerate() {
+                let mut entries = map.iter().collect::<Vec<_>>();
+                entries.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
+                for (i, (k, v)) in entries.into_iter().enumerate() {
                     if i > 0 {
                         out.push(',');
                     }
@@ -370,6 +372,11 @@ impl Parser<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn jcs_orders_utf16_keys_and_normalises_negative_zero() {
+        let v = Value::parse("{\"\\ue000\":-0,\"\\ud800\\udc00\":1}").unwrap();
+        assert_eq!(v.to_jcs(), "{\"\u{10000}\":1,\"\u{e000}\":0}");
+    }
 
     #[test]
     fn jcs_orders_keys_and_roundtrips() {

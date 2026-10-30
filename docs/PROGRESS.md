@@ -388,3 +388,36 @@ No observed reference disagreement, so no deciding-spec divergence to report.
   permutation-only component separately. Two valid frames separated by H
   on a non-borrowed wire accept; H on B rejects. The correctly hashed
   positive witness agrees with reference CLI (95 documented comparisons).
+
+## 2026-10-30 — further schema and symbolic interface audit
+
+- Red-green canonical metadata rejects non-string integers above 2^53.
+  The 9007199254740993 schedule witness agrees with the reference's §16.1
+  rejection. JCS key serialization now uses UTF-16 code-unit order, including
+  astral keys, rather than Rust's Unicode scalar order.
+- Structural certificate subclaim indices are checked for range and cycles.
+  Imported action mut-region contracts now reject a read-only caller region
+  under §5.1 without requiring a callee body.
+- Symbolic interface-only oracle/action calls compose under predicates, ctl,
+  adj, qif and literal loops. The analysis checks all bodies (even zero-trip),
+  predicate balance, selector widths, effective-control/call disjointness,
+  interface widths/roles and classical argument types. Opaque imported action
+  calls are admitted under their published interface contract when the caller
+  has no workspace obligation. Action oracle calls now use the action's mem
+  group (group 2), not the oracle's group 3.
+- Additional red-green regression found angle tags colliding with literals
+  inside call argument lists; the fresh-tag exclusion set now includes those
+  literals. Tags are only algebraic labels, never numerical samples.
+- Added explicit §6.4 M2 failure for controlled concrete action schedules
+  whose inherited-context cleanup-key audit is not yet implemented.
+- CC diagnostic allocation now enforces heap/table capacity before mutation,
+  retains actual zero-size entry lengths, and refuses frees of pinned globals.
+  All four edge conditions have regression coverage.
+- Check comparisons now **96 agree / 0 diverge** (the 93 checkpoint plus
+  call-window, separated-frame and wide-integer witnesses). No reference
+  disagreement was observed, so there is no deciding-sentence divergence.
+- M2 remains incomplete: general symbolic workspace/count/token proofs,
+  cyclic and interprocedural-indirect matched cleanup, full imported opaque
+  workspace provenance, incoming expected-table/external-program/library
+  replay, frame-descriptor schemas and inherited-context schedule auditing
+  still have explicit M2 errors. No obligation is moved to M3.

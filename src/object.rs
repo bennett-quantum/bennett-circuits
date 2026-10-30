@@ -379,7 +379,17 @@ fn parse_json_section(name: &str, body: &[String]) -> Result<Value> {
     if !matches!(v, Value::Object(_)) {
         bail!("object: section {name} is not a JSON object");
     }
-    if v.to_jcs() != body[0] {
+    fn exact_metadata_numbers(v: &Value) -> bool {
+        match v {
+            Value::Int(s) => s
+                .parse::<i128>()
+                .is_ok_and(|n| n.unsigned_abs() <= (1u128 << 53)),
+            Value::Array(vs) => vs.iter().all(exact_metadata_numbers),
+            Value::Object(m) => m.values().all(exact_metadata_numbers),
+            _ => true,
+        }
+    }
+    if v.to_jcs() != body[0] || !exact_metadata_numbers(&v) {
         bail!("object: section {name} line is not RFC 8785 canonical (§16.1)");
     }
     Ok(v)

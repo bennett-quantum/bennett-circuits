@@ -579,13 +579,30 @@ impl<'a> Machine<'a> {
             } else {
                 match op {
                     "alloc" => {
-                        let n = self.n(a, &os[0])?.max(1);
+                        let n = self.n(a, &os[0])?;
                         let p = self.state.bump;
-                        let Some(end) = p
-                            .checked_add(n)
-                            .filter(|e| *e <= mask(self.object.header.ptr_width))
-                        else {
-                            self.fault(7)?;
+                        let layout =
+                            self.object.layout.as_ref().ok_or_else(|| {
+                                Error("CC: allocation without layout (§7.2)".into())
+                            })?;
+                        let heap_end = layout.get("heap_base").and_then(Value::as_u64).unwrap()
+                            as u128
+                            + layout
+                                .get("heap_limit_max")
+                                .and_then(Value::as_u64)
+                                .unwrap() as u128;
+                        let table_exp = layout.get("A_tab").and_then(Value::as_u64).unwrap();
+                        let Some(capacity) = 1u128.checked_shl(
+                            table_exp
+                                .try_into()
+                                .map_err(|_| Error("CC: table exponent host limit".into()))?,
+                        ) else {
+                            bail!("CC: table exponent host limit");
+                        };
+                        let Some(end) = p.checked_add(n.max(1)).filter(|e| {
+                            *e <= heap_end && (self.state.allocations.len() as u128) < capacity
+                        }) else {
+                            self.fault(2)?;
                             unreachable!()
                         };
                         self.state.bump = end;
@@ -595,11 +612,23 @@ impl<'a> Machine<'a> {
                     }
                     "free" => {
                         let p = self.n(a, &os[0])?;
+                        let pinned = self
+                            .object
+                            .layout
+                            .as_ref()
+                            .and_then(|l| l.get("globals"))
+                            .and_then(Value::as_object)
+                            .is_some_and(|gs| {
+                                gs.values().any(|g| {
+                                    g.get("base").and_then(Value::as_u64).map(u128::from) == Some(p)
+                                })
+                            });
                         if !self
                             .state
                             .allocations
                             .get(&p)
                             .is_some_and(|(_, live)| *live)
+                            || pinned
                         {
                             self.fault(7)?;
                         }
@@ -1078,4 +1107,54 @@ pub fn run(object: &Object, name: &str, options: &[String], reverse: bool) -> Re
         ("entry_memory_digest", Value::Str(digest(&m.entry))),
         ("first_difference", Value::Null),
     ]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn program(body: &str, heap: u64, globals: &str) -> Object {
+        Object::parse(&format!("bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=16\n\nsection symbols\n{{}}\n\nsection functions\nfn r @test () () () () ()\n^entry():\n{body}ret\n\nsection data\ng 00\n\nsection layout\n{{\"A_tab\":2,\"H\":12,\"S_cells\":0,\"globals\":{globals},\"heap_base\":16,\"heap_limit_max\":{heap},\"interface_regions\":{{}},\"null_size\":1,\"ptr_width\":16}}\n")).unwrap()
+    }
+    #[test]
+    fn allocation_failures_are_atomic_and_zero_size_is_not_accessible() {
+        let o = program("n = const.i16 2\np = alloc n\n", 1, "{}");
+        let r = run(&o, "test", &[], false).unwrap();
+        assert_eq!(r.get("fault").and_then(Value::as_u64), Some(2));
+        assert_eq!(r.get("memory_equals_entry"), Some(&Value::Bool(true)));
+        let o = program("n = const.i16 0\np = alloc n\nx = load.i8 p\n", 1, "{}");
+        assert_eq!(
+            run(&o, "test", &[], false)
+                .unwrap()
+                .get("fault")
+                .and_then(Value::as_u64),
+            Some(7)
+        );
+    }
+    #[test]
+    fn allocation_table_capacity_and_pinned_entries_are_enforced() {
+        let o = program(
+            "n = const.i16 1\np = alloc n\np = alloc n\np = alloc n\np = alloc n\np = alloc n\n",
+            16,
+            "{}",
+        );
+        assert_eq!(
+            run(&o, "test", &[], false)
+                .unwrap()
+                .get("fault")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        let o = program(
+            "n = const.i16 2\np = inttoptr n\nfree p\n",
+            16,
+            r#"{"g":{"base":2,"image":"g","size":1}}"#,
+        );
+        assert_eq!(
+            run(&o, "test", &[], false)
+                .unwrap()
+                .get("fault")
+                .and_then(Value::as_u64),
+            Some(7)
+        );
+    }
 }

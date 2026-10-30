@@ -784,6 +784,33 @@ fn certificate(v: &Value) -> Result<()> {
         for c in claims {
             claim(c)?;
         }
+        // Structural rules consume prior proof results. A self-supporting
+        // cycle is not a proof, and an index cannot escape its claim array.
+        fn visit_claim(n: usize, claims: &[Value], state: &mut [u8]) -> Result<()> {
+            if n >= claims.len() {
+                return Err(error("certificate.claim", "subclaim index out of range"));
+            }
+            match state[n] {
+                1 => return Err(error("certificate.claim", "cyclic subclaims")),
+                2 => return Ok(()),
+                _ => {}
+            }
+            state[n] = 1;
+            if let Some(subclaims) = claims[n].get("subclaims") {
+                for i in array(subclaims, "certificate.claim")? {
+                    let i = natural(i, "certificate.claim")?;
+                    let i = usize::try_from(i)
+                        .map_err(|_| error("certificate.claim", "subclaim index out of range"))?;
+                    visit_claim(i, claims, state)?;
+                }
+            }
+            state[n] = 2;
+            Ok(())
+        }
+        let mut state = vec![0; claims.len()];
+        for n in 0..claims.len() {
+            visit_claim(n, claims, &mut state)?;
+        }
         let verification = fields(
             &r["verification"],
             p,
@@ -907,6 +934,15 @@ mod tests {
             r#"{"bundles":[],"borrowed":[],"regions":[{"name":"r","cells":[{"index":0,"lo":0,"hi":1},{"index":0,"lo":0,"hi":1}]}]}"#,
         ] {
             assert!(domain(&Value::parse(text).unwrap()).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn certificate_claim_dependencies_are_acyclic_and_in_range() {
+        let h = "0".repeat(64);
+        for subclaims in ["[1]", "[0]"] {
+            let c=Value::parse(&format!(r#"{{"versions":{{"cert":"0.8"}},"bindings":{{"object_hash":"{h}","interface_hash":"{h}","closure_hash":"{h}"}},"producer":{{"name":"test","version":"1","materialisation":{{"llvm_version":"none","pipeline":[],"normaliser_version":"1"}}}},"regions":{{"{h}":{{"claims":[{{"kind":"structural","rule":"adjoint_table","subclaims":{subclaims},"witness":{{}}}}],"verification":{{}}}}}},"composition":{{"method":"sum_over_multiplicities","multiplicities":{{}},"epsilon_total":{{"diamond":0}}}}}}"#)).unwrap();
+            assert!(certificate(&c).is_err(), "{subclaims}");
         }
     }
 }

@@ -526,6 +526,10 @@ fn symbolic_angles_validate_exact_adjoint_histories_for_all_arguments() {
     for bad in [
         good.replace(
             "adj action_call @rot (d) () () (alpha)",
+            "adj action_call @rot (d) () () (2)",
+        ),
+        good.replace(
+            "adj action_call @rot (d) () () (alpha)",
             "adj action_call @rot (d) () () (beta)",
         ),
         good.replace("qfree d", "s t\nqfree d")
@@ -557,4 +561,112 @@ fn translation_lemma_is_checked_per_maximal_permutation_frame() {
     let bad = body.replace("h t", "h b");
     let e = generated(&bad).hash().unwrap_err();
     assert!(e.0.contains("§5.6"), "{e}");
+}
+
+#[test]
+fn object_metadata_requires_wide_integers_to_use_decimal_strings() {
+    let text=std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/conformance/cases/objects/sched_inc8.bisa").unwrap();
+    let (prefix, line) = text.split_once("section schedule\n").unwrap();
+    let mut schedule = Value::parse(line.trim_end()).unwrap();
+    let Value::Object(root) = &mut schedule else {
+        unreachable!()
+    };
+    let Value::Object(binding) = root.get_mut("bindings").unwrap() else {
+        unreachable!()
+    };
+    let Value::Array(budget) = binding.get_mut("budget").unwrap() else {
+        unreachable!()
+    };
+    budget[0] = Value::Int("9007199254740993".into());
+    let text = format!("{prefix}section schedule\n{}\n", schedule.to_jcs());
+    let e = Object::parse(&text).and_then(|o| o.check()).unwrap_err();
+    assert!(e.0.contains("§16.1"), "{e}");
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/unsafe-meta-int.bisa");
+    std::fs::write(&p, text).unwrap();
+    let reference=Command::new("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref").arg("check").arg(p).output().unwrap();
+    assert!(!reference.status.success());
+    assert!(String::from_utf8_lossy(&reference.stderr).contains("§16.1"));
+}
+
+#[test]
+fn imported_action_cannot_write_a_readonly_caller_region() {
+    use bennett_circuits::object::Import;
+    let mut o = generated(
+        "action @a () () (r:region[0,1] in) () ()\n^entry():\naction_call @external () () (r) ()\n",
+    );
+    o.imports.push(Import{name:"external".into(),pinned_closure_hash:None,signature:Value::parse(r#"{"abi":"0.8","kind":"action","tier":"q","mut":[],"in":[],"mem":[{"A":0,"W":1,"role":"mut"}],"args":[],"bounds":[]}"#).unwrap()});
+    let e = o.hash().unwrap_err();
+    assert!(
+        e.0.contains("§5.1") && !e.0.contains("unimplemented"),
+        "{e}"
+    );
+}
+
+#[test]
+fn inherited_control_schedule_audit_fails_explicitly_until_implemented() {
+    let mut o = generated("action @a (t:wire mut) () () () ()\n^entry():\nx t\n");
+    let source=Object::parse(&std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/conformance/cases/objects/sched_inc8.bisa").unwrap()).unwrap();
+    let mut schedule = source.schedule.unwrap();
+    let Value::Object(root) = &mut schedule else {
+        unreachable!()
+    };
+    let Value::Object(b) = root.get_mut("bindings").unwrap() else {
+        unreachable!()
+    };
+    b.insert("region".into(), Value::Str("a".into()));
+    b.insert("variant".into(), Value::Str("controlled".into()));
+    b.insert("inherited_controls".into(), Value::Int("1".into()));
+    b.insert(
+        "closure_hash".into(),
+        Value::Str(o.hash().unwrap().symbols["a"].closure_hash.clone().unwrap()),
+    );
+    o.schedule = Some(schedule);
+    let e = o.hash().unwrap_err();
+    assert!(
+        e.0.contains("unimplemented: §6.4") && e.0.contains("milestone 2"),
+        "{e}"
+    );
+}
+
+#[test]
+fn parameterized_action_oracle_calls_bind_the_action_memory_group() {
+    let mut o=Object::parse(&std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/tests/fixtures/tiny_memory.bisa").unwrap()).unwrap();
+    let mut action = generated(
+        "perm_action @a (t:wire mut, fr:wire[4] mut) (x:wire in) (db:region[0,8] in) (tk:token) ()\n^entry():\noracle_call @tiny tk (x) t fr (db) ()\n",
+    );
+    action.symbols[0].index = "1".into();
+    o.functions.extend(action.functions);
+    o.symbols.extend(action.symbols);
+    o.hash().unwrap();
+}
+
+#[test]
+fn symbolic_interface_calls_preserve_predicates_controls_and_literal_loop_contracts() {
+    let oracle = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\nregs { r:reg[1] }\n^entry():\nr = lift.xor x x\nlift.retval r\n";
+    let body = format!(
+        "{oracle}perm_action @a (t:wire mut, fr:wire[4] mut) (x:wire in, p:wire in, q:wire in) () (tk:token) ()\nregs {{  }} bounds {{2}}\n^entry():\nqpred p\nqloop 2 {{\nctl q adj oracle_call @o tk (x) t fr () ()\n}}\nqunpred p\n"
+    );
+    generated(&body).hash().unwrap();
+    let bad = body.replace("ctl q adj", "ctl t adj");
+    let e = generated(&bad).hash().unwrap_err();
+    assert!(
+        e.0.contains("§3.3") && !e.0.contains("unimplemented"),
+        "{e}"
+    );
+}
+
+#[test]
+fn symbolic_opaque_action_calls_use_the_full_interface_contract() {
+    use bennett_circuits::object::Import;
+    let mut o = generated(
+        "action @a (t:wire mut) (p:wire in) () (n:i8) ()\n^entry():\nctl p action_call @external (t) () () (n)\n",
+    );
+    o.imports.push(Import{name:"external".into(),pinned_closure_hash:None,signature:Value::parse(r#"{"abi":"0.8","kind":"action","tier":"q","mut":[1],"in":[],"mem":[],"args":["i8"],"bounds":[]}"#).unwrap()});
+    assert_eq!(o.hash().unwrap().status, "unlinked");
+    o.imports[0].signature=Value::parse(r#"{"abi":"0.8","kind":"action","tier":"q","mut":[2],"in":[],"mem":[],"args":["i8"],"bounds":[]}"#).unwrap();
+    let e = o.hash().unwrap_err();
+    assert!(
+        e.0.contains("§3.3") && !e.0.contains("unimplemented"),
+        "{e}"
+    );
 }

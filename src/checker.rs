@@ -614,6 +614,7 @@ fn lifted_call(o: &Object, f: &Function, i: &Instr, names: &BTreeMap<String, Typ
         bail!("checker: memory arity (§3.3)")
     }
     for (n, p) in mems.iter().zip(mem_sig) {
+        let caller_mem = &f.groups[if f.is_action() { 2 } else { 3 }];
         let Some(Type::Region(aa, w)) = names.get(n) else {
             bail!("checker: unknown memory region (§3.3)")
         };
@@ -623,13 +624,13 @@ fn lifted_call(o: &Object, f: &Function, i: &Instr, names: &BTreeMap<String, Typ
             bail!("checker: memory geometry (§3.3)")
         }
         if p.get("role").and_then(|v| v.as_str()) == Some("mut")
-            && f.groups[3]
+            && caller_mem
                 .iter()
                 .any(|p| p.name == *n && p.role.as_deref() == Some("in"))
         {
             bail!("checker: in region passed to mut slot (§3.3)")
         }
-        if !f.groups[3].iter().any(|p| p.name == *n) {
+        if !caller_mem.iter().any(|p| p.name == *n) {
             bail!("checker: lifted memory must be mapped caller region (§4.2)")
         }
     }
@@ -889,6 +890,25 @@ fn adj_name(g: BaseGate) -> String {
     format!("{:?}", g.adjoint())
 }
 fn abstract_action(o: &Object, f: &Function, p: &Program) -> Result<()> {
+    if let Some(binding) = o.schedule.as_ref().and_then(|s| s.get("bindings"))
+        && binding
+            .get("region")
+            .and_then(|v| v.as_str())
+            .is_some_and(|n| n.trim_start_matches('@') == f.name)
+        && (binding
+            .get("inherited_controls")
+            .and_then(|v| v.as_u64())
+            .is_some_and(|n| n > 0)
+            || binding.get("variant").and_then(|v| v.as_str()) == Some("controlled")
+            || p.circuits
+                .iter()
+                .flat_map(|c| &c.body)
+                .any(|n| matches!(n,Node::Call{controls,..}if !controls.is_empty())))
+    {
+        bail!(
+            "unimplemented: §6.4 inherited-control cleanup schedule key validation (milestone 2)"
+        );
+    }
     validate_pairs(p)?;
     let (flat, nonperm_calls) = crate::flatten::flatten_with_events(p)?;
     let top = p.top_circuit()?;
@@ -1303,10 +1323,15 @@ fn symbolic_angle_action(o: &Object, f: &Function) -> Result<()> {
     for cf in &o.functions {
         for i in all(cf) {
             for a in &i.operands {
-                if let Operand::Float(s) | Operand::Int(s) = a
-                    && let Ok(v) = s.parse::<f64>()
-                {
-                    forbidden.insert(v.abs().to_bits());
+                let texts: &[String] = match a {
+                    Operand::Float(s) | Operand::Int(s) => std::slice::from_ref(s),
+                    Operand::List(ss) => ss,
+                    _ => &[],
+                };
+                for text in texts {
+                    if let Ok(v) = text.parse::<f64>() {
+                        forbidden.insert(v.abs().to_bits());
+                    }
                 }
             }
         }
@@ -1368,14 +1393,11 @@ fn action_readonly(o: &Object, f: &Function) -> Result<()> {
             if let (Some(Operand::Sym(name)), Some(Operand::List(ns))) =
                 (actuals.first(), actuals.get(3))
             {
-                if let Some(cf) = o.function(name) {
-                    for (n, param) in ns.iter().zip(&cf.groups[2]) {
-                        if param.role.as_deref() == Some("mut") {
-                            written.push(n.clone());
-                        }
+                let cf = callee_contract(o, name)?;
+                for (n, param) in ns.iter().zip(&cf.groups[2]) {
+                    if param.role.as_deref() == Some("mut") {
+                        written.push(n.clone());
                     }
-                } else {
-                    bail!("unimplemented: imported action in-wire contract (milestone 2)")
                 }
             }
         }
@@ -1413,16 +1435,234 @@ fn action_readonly(o: &Object, f: &Function) -> Result<()> {
 }
 
 fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
-    // Contract-only straight-line calls with interface operands have no local
-    // cleanup obligations. Never choose a concrete token to validate all tokens.
+    // Contract-only interface calls have no local cleanup obligations. Their
+    // structured compositions are checked inductively, including zero-trip
+    // bodies. Never choose a concrete token to validate all tokens.
     let names = f
         .groups
         .iter()
         .flatten()
         .map(|p| (p.name.clone(), p.ty.clone()))
         .collect::<BTreeMap<_, _>>();
-    for i in all(f) {
+    fn control(op: &Operand, names: &BTreeMap<String, Type>) -> Result<(String, u32)> {
+        match op {
+            Operand::Name(n) if names.get(n) == Some(&Type::Wire(1)) => Ok((n.clone(), 0)),
+            Operand::Indexed(n, i) if matches!(names.get(n),Some(Type::Wire(w))if i<w) => {
+                Ok((n.clone(), *i))
+            }
+            _ => bail!("checker: symbolic control requires one live interface wire (§3.3)"),
+        }
+    }
+    fn prepare(
+        is: &[Instr],
+        names: &BTreeMap<String, Type>,
+        inherited: &[(String, u32)],
+        out: &mut Vec<Instr>,
+    ) -> Result<()> {
+        let mut active = inherited.to_vec();
+        let mut pushed = Vec::new();
+        for i in is {
+            if i.opcode == "qpred" || i.opcode == "qunpred" {
+                if i.operands.len() != 1 || !i.lhs.is_empty() || !i.children.is_empty() {
+                    bail!("checker: predicate schema (§3.3)")
+                }
+                let c = control(&i.operands[0], names)?;
+                if i.opcode == "qpred" {
+                    if active.contains(&c) {
+                        bail!("checker: duplicate effective control (§3.3)")
+                    }
+                    active.push(c.clone());
+                    pushed.push(c);
+                } else {
+                    if pushed.pop() != Some(c.clone()) || active.pop() != Some(c) {
+                        bail!("checker: unmatched predicate pop (§3.5)")
+                    }
+                }
+                continue;
+            }
+            if i.opcode == "qif" || i.opcode == "qloop" {
+                if !i.lhs.is_empty()
+                    || i.children.is_empty()
+                    || i.children.len() > if i.opcode == "qif" { 2 } else { 1 }
+                {
+                    bail!("checker: structured interface schema (§4.6)")
+                }
+                let mut inner = active.clone();
+                if i.opcode == "qif" {
+                    if i.operands.len() != 1 {
+                        bail!("checker: qif arity (§4.6)")
+                    }
+                    let c = control(&i.operands[0], names)?;
+                    if inner.contains(&c) {
+                        bail!("checker: duplicate selector/effective control (§3.3)")
+                    }
+                    inner.push(c);
+                } else {
+                    let Some(Operand::Int(_)) = i.operands.first() else {
+                        bail!(
+                            "unimplemented: §5.3 symbolic trip-count bound validation (milestone 2)"
+                        )
+                    };
+                    let n = int(&i.operands[0])?;
+                    if i.operands.len() == 3 {
+                        if !matches!(&i.operands[1],Operand::Name(s)if s=="while") {
+                            bail!("checker: qloop while schema (§4.6)")
+                        }
+                        let Operand::Name(cond) = &i.operands[2] else {
+                            bail!("checker: while condition bundle (§4.6)")
+                        };
+                        if !matches!(names.get(cond),Some(Type::Wire(w))if u64::from(*w)==n) {
+                            bail!("checker: condition width/count (§4.6)")
+                        }
+                        // Each iteration's flag depends on its prefix of cond;
+                        // reserve all its wires when checking the body.
+                        for j in 0..n {
+                            let c = (cond.clone(), j as u32);
+                            if inner.contains(&c) {
+                                bail!("checker: condition/effective control overlap (§3.3)")
+                            };
+                            inner.push(c);
+                        }
+                    } else if i.operands.len() != 1 {
+                        bail!("checker: qloop arity (§4.6)")
+                    }
+                }
+                for body in &i.children {
+                    prepare(body, names, &inner, out)?;
+                }
+                continue;
+            }
+            let modified = i.opcode == "ctl" || i.opcode == "adj";
+            let mut plain = i.clone();
+            let mut context = active.clone();
+            while plain.opcode == "ctl" || plain.opcode == "adj" {
+                let count = if plain.opcode == "ctl" {
+                    let c = control(
+                        plain
+                            .operands
+                            .first()
+                            .ok_or_else(|| err("checker: ctl arity (§3.3)"))?,
+                        names,
+                    )?;
+                    if context.contains(&c) {
+                        bail!("checker: duplicate effective control (§3.3)")
+                    };
+                    context.push(c);
+                    1
+                } else {
+                    0
+                };
+                let Some(Operand::Name(next)) = plain.operands.get(count) else {
+                    bail!("checker: call modifier schema (§4.7)")
+                };
+                plain.opcode = next.clone();
+                plain.operands.drain(..count + 1);
+            }
+            if modified && !matches!(plain.opcode.as_str(), "oracle_call" | "action_call") {
+                bail!("checker: modifiers require region call (§4.7)")
+            }
+            if !plain.children.is_empty() {
+                bail!("checker: call has unexpected body (§3.3)")
+            }
+            let actuals = match plain.opcode.as_str() {
+                "qinplace" => plain.operands.get(3..4),
+                "oracle_call" => plain.operands.get(2..6),
+                "action_call" => plain.operands.get(1..4),
+                _ => None,
+            };
+            if let Some(actuals) = actuals {
+                for a in actuals {
+                    let ns = match a {
+                        Operand::List(ns) => ns.clone(),
+                        Operand::Name(n) => vec![n.clone()],
+                        _ => bail!("checker: call operands (§3.3)"),
+                    };
+                    if ns.iter().any(|n| context.iter().any(|(c, _)| c == n)) {
+                        bail!("checker: effective control overlaps call operand (§3.3)")
+                    }
+                }
+            }
+            out.push(plain);
+        }
+        if !pushed.is_empty() {
+            bail!("checker: predicate stack not empty at structured exit (§3.5)")
+        }
+        Ok(())
+    }
+    if f.blocks.len() != 1 || !f.blocks[0].params.is_empty() {
+        bail!("unimplemented: §6 symbolic action CFG validation (milestone 2)")
+    }
+    let mut calls = Vec::new();
+    prepare(&f.blocks[0].instrs, &names, &[], &mut calls)?;
+    for i in &calls {
         match i.opcode.as_str() {
+            "action_call" => {
+                if i.operands.len() != 5 || !i.lhs.is_empty() {
+                    bail!("checker: symbolic action call schema (§3.3)");
+                }
+                let Operand::Sym(name) = &i.operands[0] else {
+                    bail!("checker: action symbol (§4.7)")
+                };
+                let cf = callee_contract(o, name)?;
+                if !cf.is_action() {
+                    bail!("checker: action callee kind (§4.7)")
+                }
+                if f.kind == FnKind::PermAction && cf.kind != FnKind::PermAction {
+                    bail!("checker: permutation action calls non-permutation action (§5.3)")
+                }
+                let mut distinct = BTreeSet::new();
+                for (k, group) in [(1, 0), (2, 1), (3, 2)] {
+                    let Operand::List(ns) = &i.operands[k] else {
+                        bail!("checker: action list (§3.3)")
+                    };
+                    if ns.len() != cf.groups[group].len() {
+                        bail!("checker: action interface arity (§3.3)")
+                    }
+                    for (n, p) in ns.iter().zip(&cf.groups[group]) {
+                        if !distinct.insert(n) || names.get(n) != Some(&p.ty) {
+                            bail!("checker: action operand overlap/type/width (§3.3)")
+                        }
+                        if group == 0 && !f.groups[0].iter().any(|p| p.name == *n) {
+                            bail!("checker: action mut slot requires mutable caller bundle (§5.1)")
+                        }
+                        if group == 2
+                            && p.role.as_deref() == Some("mut")
+                            && !f.groups[2]
+                                .iter()
+                                .any(|p| p.name == *n && p.role.as_deref() == Some("mut"))
+                        {
+                            bail!("checker: in region passed to mut slot (§5.1)")
+                        }
+                    }
+                }
+                let Operand::List(args) = &i.operands[4] else {
+                    bail!("checker: action argument list (§3.3)")
+                };
+                if args.len() != cf.groups[3].len() {
+                    bail!("checker: classical argument arity (§3.3)")
+                }
+                for (n, p) in args.iter().zip(&cf.groups[3]) {
+                    if let Some(t) = names.get(n) {
+                        if *t != p.ty {
+                            bail!("checker: classical argument type (§3.3)")
+                        }
+                    } else {
+                        let valid = match p.ty {
+                            Type::F64 => n.parse::<f64>().is_ok_and(f64::is_finite),
+                            Type::Int(w) => n
+                                .parse::<u128>()
+                                .is_ok_and(|x| w == 128 || x < (1u128 << w)),
+                            Type::Ptr => n.parse::<u128>().is_ok_and(|x| {
+                                o.header.ptr_width == 128 || x < (1u128 << o.header.ptr_width)
+                            }),
+                            _ => false,
+                        };
+                        if !valid {
+                            bail!("checker: classical literal type/range (§3.3)")
+                        }
+                    }
+                }
+            }
             "qinplace" => {
                 if i.operands.len() != 4 || !i.lhs.is_empty() || !i.children.is_empty() {
                     bail!("checker: qinplace schema (§4.5)")
