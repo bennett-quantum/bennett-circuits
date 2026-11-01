@@ -1,8 +1,11 @@
-State (2026-10-30 ~14:30Z, maintainer pause): M4 (proof-carrying output under the maintainer-ratified proof
-contracts: histories proof IR, pending obligations for opaque imports, closure registry, positional tuple tables,
-typed-record frames) started by one sol implementer: foundation c9c264e plus checkpoint 3a12d9e (164 tests green, may
-be mid-feature); resume from docs/PROGRESS.md and docs/briefs/2026-10-30-circuits-m4.md. Library-gated paths keep
-refusing on b-isa-spec-8r4 until the ref catalog is published. Read ../bennett/HANDOFF.md first.
+Current state (checked 2026-11-01 with `bd list`): M1 complete; M2 closed by disposition; M3 (1ud) in progress, open on
+publication dependencies; M4 epic **9xp** in progress (foundation c9c264e, checkpoint 3a12d9e; resume from
+docs/PROGRESS.md and docs/briefs/2026-10-30-circuits-m4.md); M5 QIR/Quil (lv6) open. **The full gate is not green on
+the re-imported reference fixtures**: bead **p8s** (in progress by another job) records
+`check_agrees_on_every_fixture` failing on ISA r9-codex-oracle.bisa with an unimplemented §6 qalloc validation
+(7bu/z9r). Library-gated paths keep refusing on b-isa-spec-8r4. Read ../bennett/HANDOFF.md first.
+
+Everything below is the recorded M3 state at 2026-10-30 and its counts were not re-run since.
 
 State 2026-10-30: M1 complete; M2 closed by disposition at b4b28ac;
 M3 target/default scheduling implementation landed at fe8f37f + 4025a21,

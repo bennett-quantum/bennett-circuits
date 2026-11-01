@@ -68,8 +68,8 @@ certificate subset in addition to identity. General symbolic/opaque workspace
 proofs and broader certificate replay retain explicit named errors. See
 HANDOFF.md and docs/PROGRESS.md for exact coverage.
 
-Harnesses: 19 actions / 930 basis comparisons and 59 oracle occurrences / 488
-basis comparisons, all agree. Small oracle interfaces (<=10 bits) are
+Harnesses (counts as recorded at the M3 acceptance in docs/PROGRESS.md; the full gate is currently
+being restored on re-imported fixtures, bead p8s): Small oracle interfaces (<=10 bits) are
 exhaustive; wider oracle interfaces use four explicit full-tuple patterns.
 These tests are evidence, not certificates. `scripts/run-conformance` uses the published harness with all artifacts
 confined to this repo. Select `--suite A`, `--suite B`, or `--suite F` (default).
