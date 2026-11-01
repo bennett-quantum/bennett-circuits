@@ -6,7 +6,7 @@ mod exact;
 mod sim;
 #[path = "support/target.rs"]
 mod target;
-use bennett_circuits::{lower::lower_program, object::Object, qasm};
+use bennett_circuits::{object::Object, qasm};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -96,11 +96,20 @@ fn every_action_every_basis_matches_run_action() {
         let obj = Object::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         obj.check().unwrap();
         for f in obj.functions.iter().filter(|f| f.is_action()) {
-            let program = lower_program(&obj, &f.name).unwrap();
+            let bindings = fixtures::arguments(f);
+            let program =
+                bennett_circuits::lower::lower_program_with_args(&obj, &f.name, &bindings).unwrap();
             let text = qasm::export(&program).unwrap();
             assert_eq!(qasm::parse(&text).unwrap(), program);
             let flat = qasm::parse_flat(&text).unwrap();
-            let placed = bennett_circuits::placement::place_action(&obj, &f.name, &[]).unwrap();
+            let qir = bennett_circuits::qir::export(&program).unwrap();
+            assert_eq!(bennett_circuits::qir::parse(&qir).unwrap(), program);
+            let qir_flat = bennett_circuits::qir::parse_flat(&qir).unwrap();
+            let quil = bennett_circuits::quil::export(&program).unwrap();
+            assert_eq!(bennett_circuits::quil::parse(&quil).unwrap(), program);
+            let quil_flat = bennett_circuits::quil::parse_flat(&quil).unwrap();
+            let placed =
+                bennett_circuits::placement::place_action(&obj, &f.name, &bindings).unwrap();
             let targets = [
                 target::universal(false, false),
                 target::universal(false, true),
@@ -109,8 +118,9 @@ fn every_action_every_basis_matches_run_action() {
             let targeted = targets
                 .iter()
                 .map(|t| {
-                    let p = bennett_circuits::placement::place_on_target(&obj, &f.name, &[], t)
-                        .unwrap();
+                    let p =
+                        bennett_circuits::placement::place_on_target(&obj, &f.name, &bindings, t)
+                            .unwrap();
                     let q = qasm::export_placed(&p).unwrap();
                     let parsed = qasm::parse_flat(&q).unwrap();
                     assert_eq!(p.flat, parsed);
@@ -135,6 +145,7 @@ fn every_action_every_basis_matches_run_action() {
                         "--basis",
                         &bits,
                     ])
+                    .args(fixtures::cli(&bindings))
                     .env_remove("DISPLAY")
                     .env_remove("WAYLAND_DISPLAY")
                     .env_remove("DBUS_SESSION_BUS_ADDRESS")
@@ -153,6 +164,20 @@ fn every_action_every_basis_matches_run_action() {
                 let ours = std::panic::catch_unwind(|| sim::basis(&flat, &bits)).unwrap_or_else(|failure| {
                     panic!("DIVERGENCE {} @{} input={bits}: exported simulation failed {failure:?}; reference={reference:?}", path.display(), f.name)
                 });
+                assert_eq!(
+                    sim::basis(&qir_flat, &bits),
+                    ours,
+                    "QIR {} @{} input={bits}",
+                    path.display(),
+                    f.name
+                );
+                assert_eq!(
+                    sim::basis(&quil_flat, &bits),
+                    ours,
+                    "Quil {} @{} input={bits}",
+                    path.display(),
+                    f.name
+                );
                 assert_eq!(
                     sim::basis(&placed.flat, &bits),
                     ours,
@@ -202,10 +227,13 @@ fn every_action_every_basis_matches_run_action() {
     }
     assert!(actions >= 19, "expected fixture plus supplemental actions");
     eprintln!(
-        "HARNESS: {actions} actions, {cases} basis comparisons, {cases} agree, 0 diverge; phase-sensitive display tolerance 2e-12; exact support/workspace checks; reuse, native, scheme and QRAM placement passes each agree on all {cases} tuples"
+        "HARNESS: {actions} actions, {cases} basis comparisons, {cases} agree, 0 diverge; phase-sensitive display tolerance 2e-12; exact support/workspace checks; QIR, Quil, reuse, native, scheme and QRAM placement passes each agree on all {cases} tuples"
     );
 }
 
+#[path = "support/fixtures.rs"]
+#[allow(dead_code)]
+mod fixtures;
 fn synthetic_corpus() -> PathBuf {
     use bennett_circuits::{json::Value as V, object::derived_signature};
     let header = "bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32\n\nsection symbols\n";

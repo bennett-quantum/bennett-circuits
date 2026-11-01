@@ -54,13 +54,11 @@ fn domain(v: &Value, c: &Circuit) -> Result<()> {
         .iter()
         .filter(|w| w.kind == WsKind::Borrowed)
         .collect::<Vec<_>>();
+    // §12.2 K70: borrowed names are labels; positions bind lifetimes.
     if borrowed.len() != bs.len()
-        || bs.iter().any(|w| {
-            borrowed
-                .iter()
-                .filter(|v| full_word(v, &w.name, w.width))
-                .count()
-                != 1
+        || borrowed.iter().zip(&bs).any(|(v, w)| {
+            let label = v.get("name").and_then(Value::as_str).unwrap_or("");
+            label.is_empty() || !full_word(v, label, w.width)
         })
     {
         return Err(error("borrowed domain is not the full D"));

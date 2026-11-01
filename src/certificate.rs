@@ -311,22 +311,14 @@ impl Space {
                 )
             })
             .collect::<Vec<_>>();
-        let names = c
-            .workspace
-            .iter()
-            .filter(|w| w.kind == WsKind::Borrowed)
-            .map(|w| w.name.clone())
-            .collect::<Vec<_>>();
-        let dirty = alloc
+        // §12.2 borrowed entries identify checked lifetimes by position;
+        // names are labels only (0.9 K70). Allocation order includes nested
+        // and adjoint call instances, even when source bundle names repeat.
+        let borrowed = alloc
             .iter()
             .filter(|a| a.kind == WsKind::Borrowed)
-            .collect::<Vec<_>>();
-        if names.len() != dirty.len() {
-            bail!("unimplemented: nested borrow domain identities; bennett-circuits-4pf (§12.2)")
-        }
-        let borrowed = names
-            .into_iter()
-            .zip(dirty.iter().map(|a| a.wires.clone()))
+            .enumerate()
+            .map(|(i, a)| (format!("borrow:{i}"), a.wires.clone()))
             .collect::<Vec<_>>();
         let components = bundles
             .iter()
@@ -713,7 +705,7 @@ fn generate_relation(
                     "materialisation",
                     obj([
                         ("llvm_version", strv("none")),
-                        ("pipeline", arr(vec![])),
+                        ("pipeline", strv("history-1")),
                         ("normaliser_version", strv("history-1")),
                     ]),
                 ),

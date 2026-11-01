@@ -1,5 +1,8 @@
 #[path = "support/exact.rs"]
 mod exact;
+#[path = "support/fixtures.rs"]
+#[allow(dead_code)]
+mod fixtures;
 #[path = "support/sim.rs"]
 mod sim;
 use bennett_circuits::{
@@ -138,14 +141,18 @@ fn placed_fixture_actions_match_unplaced_exact_states() {
         }
         let o = Object::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
         for f in o.functions.iter().filter(|f| f.is_action()) {
-            let p = place_action(&o, &f.name, &[]).unwrap();
-            let original = flatten(&lower_program(&o, &f.name).unwrap()).unwrap();
+            let bindings = fixtures::arguments(f);
+            let p = place_action(&o, &f.name, &bindings).unwrap();
+            let original = flatten(
+                &bennett_circuits::lower::lower_program_with_args(&o, &f.name, &bindings).unwrap(),
+            )
+            .unwrap();
             assert!(p.flat.num_qubits <= original.num_qubits);
             tuples += equivalent(&original, &p.flat);
             actions += 1;
         }
     }
-    assert_eq!((actions, tuples), (13, 740));
+    assert_eq!((actions, tuples), (18, 750));
     eprintln!("PLACEMENT HARNESS: {actions} actions / {tuples} exact tuples agree");
 }
 #[test]

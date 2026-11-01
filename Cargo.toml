@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+# The gate executes multi-million-gate reversible machines. Keep test
+# assertions and overflow checks while avoiding unoptimised kernel runtimes.
+[profile.test]
+opt-level = 1
+debug-assertions = true
+overflow-checks = true

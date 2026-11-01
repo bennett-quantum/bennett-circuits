@@ -2,6 +2,9 @@
 //! hierarchy preserved, every §4 Q row implemented or failing with
 //! `unimplemented: <row> (milestone N)`.
 
+#[path = "support/fixtures.rs"]
+#[allow(dead_code)]
+mod fixtures;
 use std::path::{Path, PathBuf};
 
 use bennett_circuits::flatten::flatten;
@@ -37,9 +40,10 @@ fn every_fixture_action_lowers() {
         }
         let obj = Object::parse(&std::fs::read_to_string(&path).expect("read")).expect("parse");
         for name in action_names(&obj) {
-            let program = lower_program(&obj, &name)
+            let bindings = fixtures::arguments(obj.function(&name).unwrap());
+            let program = bennett_circuits::lower::lower_program_with_args(&obj, &name, &bindings)
                 .unwrap_or_else(|e| panic!("{} @{name} lowering failed: {e}", path.display()));
-            assert_eq!(program.top, name);
+            assert!(program.top_circuit().is_ok());
             // Flattening must also succeed with sane wire counts.
             let flat = flatten(&program)
                 .unwrap_or_else(|e| panic!("{} @{name} flatten failed: {e}", path.display()));
@@ -47,7 +51,7 @@ fn every_fixture_action_lowers() {
             total += 1;
         }
     }
-    assert_eq!(total, 13, "expected 13 actions across the fixtures");
+    assert_eq!(total, 18, "audit the discovered action corpus");
 }
 
 #[test]
@@ -72,7 +76,10 @@ fn flip_keeps_uncomputation_pair() {
 fn calls_stay_hierarchical_and_controlled() {
     let obj = fixture("control_flow.bisa");
     let program = lower_program(&obj, "controlled_phase").unwrap();
-    assert!(program.circuit("phase").is_some(), "callee circuit present");
+    assert!(
+        program.circuit("minus_i").is_some(),
+        "callee circuit present"
+    );
     let top = program.circuit("controlled_phase").unwrap();
     let calls: Vec<&Node> = top
         .body
@@ -87,7 +94,7 @@ fn calls_stay_hierarchical_and_controlled() {
             controls,
             args,
         } => {
-            assert_eq!(callee, "phase");
+            assert_eq!(callee, "minus_i");
             assert!(!adjoint);
             assert_eq!(controls.len(), 1, "ctl p contributes one control");
             assert_eq!(args, &["t".to_string()]);

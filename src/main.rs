@@ -851,6 +851,8 @@ fn run_mode(args: &[String], draft: bool) -> Result<()> {
                 | "reverse"
                 | "step-check"
                 | "export-qasm"
+                | "export-qir"
+                | "export-quil"
         )
         && load(&args[1])?.schedule.is_some()
     {
@@ -911,7 +913,7 @@ fn run_mode(args: &[String], draft: bool) -> Result<()> {
             println!("{}", report_json(&report).to_jcs());
             Ok(())
         }
-        Some("export-qasm") if args.len() >= 3 => {
+        Some("export-qasm" | "export-qir" | "export-quil") if args.len() >= 3 => {
             let obj = load(&args[1])?;
             obj.check()?;
             let mut budget=None;let mut arguments=Vec::new();let mut options=args[3..].iter();
@@ -926,17 +928,21 @@ fn run_mode(args: &[String], draft: bool) -> Result<()> {
                 let budget=budget.ok_or_else(||bennett_circuits::Error("export-qasm: oracle entry requires --budget B[,heap,stack,depth]".into()))?;
                 bennett_circuits::oracle::specialise(&obj,name,budget,&arguments)?
             }else {if budget.is_some(){return Err(bennett_circuits::Error("export-qasm: --budget requires an oracle entry; pass action tokens with --arg token:B,heap,stack,depth".into()))}bennett_circuits::lower::lower_program_with_args(&obj,name,&arguments)?};
-            print!("{}", bennett_circuits::qasm::export(&p)?);
+            let text = match args[0].as_str() {
+                "export-qir" => bennett_circuits::qir::export(&p)?,
+                "export-quil" => bennett_circuits::quil::export(&p)?,
+                _ => bennett_circuits::qasm::export(&p)?,
+            };
+            print!("{text}");
             Ok(())
         }
-        Some("export-qir"|"export-quil") => Err(bennett_circuits::Error(format!("unimplemented: {} exporter (milestone 5)",args[0]))),
         Some("hash") if args.len() == 2 => {
             let report = load(&args[1])?.hash()?;
             println!("{}", report_json(&report).to_jcs());
             Ok(())
         }
         _ => Err(bennett_circuits::Error(
-            "usage: bennett-circuits check <object> | hash <object> | export-qasm <object> <region> [--budget B[,heap,stack,depth]] [--arg value]..."
+            "usage: bennett-circuits check <object> | hash <object> | export-{qasm,qir,quil} <object> <region> [--budget B[,heap,stack,depth]] [--arg value]..."
                 .into(),
         )),
     }

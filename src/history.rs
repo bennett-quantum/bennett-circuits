@@ -31,19 +31,148 @@ enum Term {
     Permutation(String, Vec<Term>),
     Oracle(String, Vec<Term>),
     Xor(BTreeSet<Term>),
+    Bits(Vec<Term>),
 }
 fn quantum(t: &Term) -> bool {
     match t {
         Term::Apply(..) => true,
+        Term::Bits(ts) => ts.iter().any(quantum),
         Term::Xor(ts) => ts.iter().any(quantum),
         Term::Oracle(_, ts) | Term::Permutation(_, ts) => ts.iter().any(quantum),
         _ => false,
     }
 }
+fn contains(term: &Term, needle: &Term) -> bool {
+    term == needle
+        || match term {
+            Term::Apply(_, ts)
+            | Term::Permutation(_, ts)
+            | Term::Oracle(_, ts)
+            | Term::Bits(ts) => ts.iter().any(|t| contains(t, needle)),
+            Term::Xor(ts) => ts.iter().any(|t| contains(t, needle)),
+            Term::Atom(_) => false,
+        }
+}
+fn bit(value: &Term, i: usize) -> Term {
+    match value {
+        Term::Bits(bits) => bits[i].clone(),
+        v if *v == zero() => zero(),
+        _ => Term::Oracle(format!("bit:{i}"), vec![value.clone()]),
+    }
+}
+fn bits(values: Vec<Term>) -> Term {
+    if values.iter().all(|v| *v == zero()) {
+        return zero();
+    }
+    if values.len() == 1 {
+        return values[0].clone();
+    }
+    if let Some(Term::Oracle(key, original)) = values.first()
+        && key == "bit:0"
+        && original.len() == 1
+        && values
+            .iter()
+            .enumerate()
+            .all(|(i, v)| *v == bit(&original[0], i))
+    {
+        return original[0].clone();
+    }
+    Term::Bits(values)
+}
+fn wire_operand(o: &Operand) -> Result<String> {
+    match o {
+        Operand::Name(n) => Ok(n.clone()),
+        Operand::Indexed(n, i) => Ok(format!("{n}[{i}]")),
+        _ => bail!("history: expected wire (§3.3)"),
+    }
+}
+fn location<'a>(n: &'a str, widths: &BTreeMap<String, Type>) -> Result<(&'a str, usize, usize)> {
+    let (base, index) =
+        if let Some((base, index)) = n.strip_suffix(']').and_then(|n| n.rsplit_once('[')) {
+            (
+                base,
+                index
+                    .parse::<usize>()
+                    .map_err(|_| Error("history: wire index (§3.3)".into()))?,
+            )
+        } else {
+            (n, 0)
+        };
+    let Some(Type::Wire(width)) = widths.get(base) else {
+        bail!("history: live wire required (§3.3)")
+    };
+    if index >= *width as usize || (base == n && *width != 1) {
+        bail!("history: scalar wire/index width (§3.3)")
+    }
+    Ok((base, index, *width as usize))
+}
+fn read_wire(
+    values: &BTreeMap<String, Term>,
+    widths: &BTreeMap<String, Type>,
+    n: &str,
+) -> Result<Term> {
+    let (base, index, width) = location(n, widths)?;
+    let value = values.get(base).ok_or("history: non-live wire (§3.3)")?;
+    Ok(if width == 1 {
+        value.clone()
+    } else {
+        bit(value, index)
+    })
+}
+fn write_wire(
+    values: &mut BTreeMap<String, Term>,
+    widths: &BTreeMap<String, Type>,
+    n: &str,
+    value: Term,
+) -> Result<()> {
+    let (base, index, width) = location(n, widths)?;
+    if width == 1 {
+        values.insert(base.into(), value);
+    } else {
+        let original = values.get(base).ok_or("history: non-live wire")?;
+        let mut parts = (0..width).map(|i| bit(original, i)).collect::<Vec<_>>();
+        parts[index] = value;
+        values.insert(base.into(), bits(parts));
+    }
+    Ok(())
+}
+fn reversible(key: &str, prior: &[Term], context: &[Term]) -> (Vec<Term>, bool) {
+    let candidate = prior.first().and_then(|t| {
+        if let Term::Permutation(k, vs) = t {
+            (k == &format!("{key}:0")).then_some(vs)
+        } else {
+            None
+        }
+    });
+    if let Some(vs) = candidate
+        && vs.len() == prior.len() + context.len()
+        && vs[prior.len()..] == *context
+        && prior
+            .iter()
+            .enumerate()
+            .all(|(i, v)| *v == Term::Permutation(format!("{key}:{i}"), vs.clone()))
+    {
+        return (vs[..prior.len()].to_vec(), true);
+    }
+    let values = prior.iter().chain(context).cloned().collect::<Vec<_>>();
+    (
+        (0..prior.len())
+            .map(|i| Term::Permutation(format!("{key}:{i}"), values.clone()))
+            .collect(),
+        false,
+    )
+}
 fn zero() -> Term {
     Term::Xor(BTreeSet::new())
 }
 fn xor(a: Term, b: Term) -> Term {
+    let width = match (&a, &b) {
+        (Term::Bits(v), _) | (_, Term::Bits(v)) => Some(v.len()),
+        _ => None,
+    };
+    if let Some(width) = width {
+        return bits((0..width).map(|i| xor(bit(&a, i), bit(&b, i))).collect());
+    }
     let mut terms = BTreeSet::new();
     for t in [a, b] {
         let xs = if let Term::Xor(xs) = t {
@@ -86,11 +215,14 @@ fn prepare(
     let mut active = inherited.clone();
     let mut pushed = vec![];
     for i in is {
+        if i.opcode == "qregion" {
+            continue;
+        } // Lexical declaration, including zero-trip bodies.
         if matches!(i.opcode.as_str(), "qpred" | "qunpred") {
             if i.operands.len() != 1 || !i.lhs.is_empty() {
                 bail!("history: predicate schema (§3.3)")
             }
-            let n = name(&i.operands[0])?.to_string();
+            let n = wire_operand(&i.operands[0])?;
             if i.opcode == "qpred" {
                 if active.iter().any(|(c, _)| *c == n) {
                     bail!("history: duplicate control (§3.3)")
@@ -112,7 +244,7 @@ fn prepare(
             {
                 bail!("history: qif schema (§4.6)")
             }
-            let n = name(&i.operands[0])?.to_string();
+            let n = wire_operand(&i.operands[0])?;
             for (j, body) in i.children.iter().enumerate() {
                 let mut cs = active.clone();
                 cs.push((n.clone(), j == 0));
@@ -123,8 +255,8 @@ fn prepare(
             continue;
         }
         if i.opcode == "qloop" {
-            if i.operands.len() != 1 || i.children.len() != 1 {
-                return Ok(false);
+            if i.children.len() != 1 || !matches!(i.operands.len(), 1 | 3) || !i.lhs.is_empty() {
+                bail!("history: qloop schema (§4.6)")
             }
             let Some(Operand::Int(n)) = i.operands.first() else {
                 return Ok(false);
@@ -132,10 +264,72 @@ fn prepare(
             let n = n
                 .parse::<u64>()
                 .map_err(|_| Error("host limit: history loop count".into()))?;
-            for _ in 0..n {
-                if !prepare(&i.children[0], &active, out)? {
+            if n > 1_000_000 {
+                bail!("host limit: materialising {n} symbolic loop iterations (§5.3)")
+            }
+            if i.operands.len() == 1 {
+                for _ in 0..n {
+                    if !prepare(&i.children[0], &active, out)? {
+                        return Ok(false);
+                    }
+                }
+                continue;
+            }
+            if !matches!(&i.operands[1],Operand::Name(k) if k == "while") || n == 0 {
+                bail!("history: while schema (§4.6)")
+            }
+            let cond = name(&i.operands[2])?.to_string();
+            let instr = |op: &str, lhs: Vec<String>, operands: Vec<Operand>| crate::object::Instr {
+                opcode: op.into(),
+                lhs,
+                operands,
+                children: vec![],
+            };
+            out.push((
+                instr(
+                    "history_while",
+                    vec![],
+                    vec![Operand::Name(cond.clone()), Operand::Int(n.to_string())],
+                ),
+                active.clone(),
+            ));
+            let prefix = format!("$history.while{}", out.len());
+            let flags = (0..n).map(|j| format!("{prefix}.{j}")).collect::<Vec<_>>();
+            for flag in &flags {
+                out.push((
+                    instr(
+                        "qalloc",
+                        vec![flag.clone()],
+                        vec![Operand::Name("any".into()), Operand::Int("1".into())],
+                    ),
+                    active.clone(),
+                ));
+            }
+            let compute = |j: usize| {
+                let mut args = vec![];
+                if j > 0 {
+                    args.push(Operand::Name(flags[j - 1].clone()));
+                }
+                args.push(Operand::Indexed(cond.clone(), j as u32));
+                args.push(Operand::Name(flags[j].clone()));
+                instr(if j == 0 { "cx" } else { "ccx" }, vec![], args)
+            };
+            for (j, flag) in flags.iter().enumerate() {
+                out.push((compute(j), active.clone()));
+                let mut cs = active.clone();
+                cs.push((flag.clone(), true));
+                if !prepare(&i.children[0], &cs, out)? {
                     return Ok(false);
                 }
+            }
+            for j in (0..flags.len()).rev() {
+                out.push((compute(j), active.clone()));
+            }
+            for flag in flags {
+                out.push((
+                    instr("qfree", vec![], vec![Operand::Name(flag)]),
+                    active.clone(),
+                ));
             }
             continue;
         }
@@ -149,7 +343,7 @@ fn prepare(
                     bail!("history: repeated ctl modifier (§4.7)")
                 }
                 controlled = true;
-                let n = name(plain.operands.first().ok_or("history: ctl operand")?)?.to_string();
+                let n = wire_operand(plain.operands.first().ok_or("history: ctl operand")?)?;
                 cs.push((n, true));
                 1
             } else {
@@ -186,8 +380,25 @@ fn prepare(
     }
     Ok(true)
 }
+fn conjunction(values: Vec<Term>) -> Term {
+    if values.iter().any(|v| *v == zero()) {
+        return zero();
+    }
+    let mut values = values
+        .into_iter()
+        .filter(|v| *v != Term::Atom("one".into()))
+        .collect::<Vec<_>>();
+    values.sort();
+    if values.is_empty() {
+        Term::Atom("one".into())
+    } else if values.len() == 1 {
+        values.pop().unwrap()
+    } else {
+        Term::Oracle("condition".into(), values)
+    }
+}
 fn masked(value: Term, condition: &Term) -> Term {
-    if value == zero() {
+    if value == zero() || *condition == zero() {
         zero()
     } else if *condition == Term::Atom("one".into()) {
         value
@@ -198,6 +409,35 @@ fn masked(value: Term, condition: &Term) -> Term {
 /// Returns false only when another universal checker must handle this body.
 /// An unresolved body is deliberately pending, never a completed proof.
 pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
+    Ok(evaluate(o, f, &mut Evaluation::default())?.0)
+}
+#[derive(Default)]
+struct Evaluation {
+    active: BTreeSet<String>,
+    completed: BTreeMap<String, (bool, bool)>,
+}
+fn evaluate(o: &Object, f: &Function, evaluation: &mut Evaluation) -> Result<(bool, bool)> {
+    if evaluation.active.len() > 512 {
+        bail!("host limit: symbolic call proof depth over 512")
+    }
+    if evaluation.active.contains(&f.name) {
+        bail!("history: action call graph cycle (§5.1: acyclic)")
+    }
+    if let Some(result) = evaluation.completed.get(&f.name) {
+        return Ok(*result);
+    }
+    evaluation.active.insert(f.name.clone());
+    let result = evaluate_body(o, f, evaluation);
+    evaluation.active.remove(&f.name);
+    if let Ok(result) = &result {
+        evaluation.completed.insert(f.name.clone(), *result);
+    }
+    result
+}
+/// Both flags are universal: a completed body proof and, independently,
+/// equality of all interface values with their formal entry atoms. The latter
+/// refines a permutation call without instantiating any token or argument.
+fn evaluate_body(o: &Object, f: &Function, evaluation: &mut Evaluation) -> Result<(bool, bool)> {
     if f.blocks.iter().any(|b| !b.params.is_empty()) {
         bail!("history: block arguments have no branch binding (§5.3)")
     }
@@ -208,13 +448,25 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
         .collect::<Vec<_>>();
     let mut prepared = vec![];
     if !prepare(&source, &vec![], &mut prepared)? {
-        return Ok(false);
+        return Ok((false, false));
     }
     let instructions = prepared.iter().map(|(i, _)| i).collect::<Vec<_>>();
     let supported = [
         "qalloc",
+        "qborrow",
+        "qreturn",
+        "cx",
+        "ccx",
+        "mcx",
+        "swap",
+        "cz",
+        "qexch",
+        "history_while",
+        "qinplace",
         "qcopy",
         "qload",
+        "qstore",
+        "qexchm",
         "qunload",
         "quncopy",
         "qfree",
@@ -236,19 +488,12 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
         .iter()
         .any(|i| !supported.contains(&i.opcode.as_str()) || !i.children.is_empty())
     {
-        return Ok(false);
-    }
-    // This checker complements the bit-level algebra. Whole-bundle histories
-    // deliberately do not alias an indexed operand with its enclosing bundle.
-    if instructions
-        .iter()
-        .any(|i| i.operands.iter().any(|a| matches!(a, Operand::Indexed(..))))
-    {
-        return Ok(false);
+        return Ok((false, false));
     }
     let mut values = BTreeMap::<String, Term>::new();
     let mut widths = BTreeMap::new();
     let mut local = BTreeSet::new();
+    let mut borrowed = BTreeMap::new();
     let mut types = f
         .groups
         .iter()
@@ -259,7 +504,97 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
         values.insert(p.name.clone(), Term::Atom(p.name.clone()));
         widths.insert(p.name.clone(), p.ty.clone());
     }
+    let mut local_regions = BTreeMap::new();
     let mut deferred = false;
+    fn declarations<'a>(
+        instructions: &'a [crate::object::Instr],
+        out: &mut Vec<&'a crate::object::Instr>,
+    ) {
+        for instruction in instructions {
+            out.push(instruction);
+            for child in &instruction.children {
+                declarations(child, out);
+            }
+        }
+    }
+    let mut lexical = vec![];
+    declarations(&source, &mut lexical);
+    let mut bounds = vec![];
+    for instruction in lexical {
+        if instruction.opcode == "qloop" {
+            let Some(Operand::Int(n)) = instruction.operands.first() else {
+                bail!("history: literal loop bound (§5.3)")
+            };
+            bounds.push(
+                n.parse::<u64>()
+                    .map_err(|_| Error("host limit: loop bound".into()))?,
+            );
+        }
+        if instruction.opcode != "qregion" {
+            continue;
+        }
+        if !instruction.lhs.is_empty()
+            || !instruction.children.is_empty()
+            || !matches!(instruction.operands.len(), 3 | 4)
+        {
+            bail!("history: qregion schema (§4.6)")
+        }
+        let region = name(&instruction.operands[0])?;
+        let dimension = |i: usize| -> Result<u32> {
+            let Operand::Int(n) = &instruction.operands[i] else {
+                bail!("history: region dimension (§4.6)")
+            };
+            n.parse()
+                .map_err(|_| Error("host limit: region dimension".into()))
+        };
+        let a = dimension(1)?;
+        let w = dimension(2)?;
+        if w == 0 || widths.contains_key(region) {
+            bail!("history: local region width/identity (§4.6)")
+        }
+        if let Some(image) = instruction.operands.get(3) {
+            let Operand::Sym(image) = image else {
+                bail!("history: region image symbol (§4.6)")
+            };
+            let size = if let Some(data) = o.data_entry(image) {
+                data.bytes.len() as u128
+            } else if let Some(import) = o.imports.iter().find(|import| import.name == *image) {
+                let signature = &import.signature;
+                if signature.as_object().is_none_or(|s| s.len() != 4)
+                    || signature.get("kind").and_then(crate::json::Value::as_str) != Some("data")
+                    || signature.get("tier").and_then(crate::json::Value::as_str) != Some("-")
+                    || signature.get("abi").and_then(crate::json::Value::as_str)
+                        != Some(&o.header.object)
+                {
+                    bail!("history: imported region image signature (§9.1)")
+                }
+                deferred = true;
+                u128::from(
+                    signature
+                        .get("size")
+                        .and_then(crate::json::Value::as_u64)
+                        .ok_or("history: data image size (§9.1)")?,
+                )
+            } else {
+                bail!("history: missing region image (§4.6)")
+            };
+            if (1u128
+                .checked_shl(a)
+                .and_then(|n| n.checked_mul(u128::from(w))))
+                != Some(size * 8)
+            {
+                bail!("history: region image size (§4.6)")
+            }
+        }
+        let initial = Term::Atom(format!("local-image:{region}:{:?}", instruction.operands));
+        values.insert(region.into(), initial.clone());
+        local_regions.insert(region.to_string(), initial);
+        widths.insert(region.into(), Type::Region(a, w));
+        types.insert(region.into(), Type::Region(a, w));
+    }
+    if bounds != f.bounds {
+        bail!("history: action bounds differ from text-order loops (§5.3)")
+    }
     let mut copies = BTreeMap::<String, String>::new();
     let mut loads = BTreeMap::<String, (String, String)>::new();
     let mut dependencies = BTreeMap::<String, BTreeSet<String>>::new();
@@ -267,6 +602,7 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
     let mut allocation_ids = BTreeMap::<String, u64>::new();
     let mut next_allocation = 0u64;
     let mut closed = BTreeSet::new();
+    let mut phases = Vec::<Term>::new();
     let read = |vs: &BTreeMap<String, Term>, n: &str| -> Result<Term> {
         vs.get(n)
             .cloned()
@@ -274,25 +610,20 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
     };
     for (i, controls) in prepared {
         let mut cs = vec![];
+        let mut control_locations = BTreeSet::new();
         for (n, positive) in &controls {
-            if widths.get(n) != Some(&Type::Wire(1)) {
-                bail!("history: control must be a live wire (§3.3)")
+            let (base, index, _) = location(n, &widths)?;
+            if !control_locations.insert((base.to_string(), index)) {
+                bail!("history: duplicate effective wire (§3.3)")
             }
-            let value = read(&values, n)?;
-            if quantum(&value) {
-                return Ok(false);
-            }
+            let value = read_wire(&values, &widths, n)?;
             cs.push(if *positive {
                 value
             } else {
                 xor(value, Term::Atom("one".into()))
             });
         }
-        let condition = if cs.is_empty() {
-            Term::Atom("one".into())
-        } else {
-            Term::Oracle("condition".into(), cs)
-        };
+        let condition = conjunction(cs);
 
         let mut op = i.opcode.as_str();
         let mut args = i.operands.as_slice();
@@ -315,6 +646,276 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
             }
         }
         match op {
+            "history_while" => {
+                let cond = name(&args[0])?;
+                let Operand::Int(n) = &args[1] else {
+                    bail!("history: while width")
+                };
+                if !matches!(widths.get(cond),Some(Type::Wire(w)) if w.to_string()==*n) {
+                    bail!("history: while condition width/count (§4.6)")
+                }
+            }
+            "cx" | "ccx" | "mcx" => {
+                let count = if op == "ccx" { 3 } else { 2 };
+                if args.len() != count || !i.lhs.is_empty() {
+                    bail!("history: controlled X schema (§3.3)")
+                }
+                let target = wire_operand(&args[count - 1])?;
+                let (base, index, _) = location(&target, &widths)?;
+                let sources = if op == "mcx" {
+                    list(&args[0])?.to_vec()
+                } else {
+                    args[..count - 1]
+                        .iter()
+                        .map(wire_operand)
+                        .collect::<Result<Vec<_>>>()?
+                };
+                let mut touched = BTreeSet::new();
+                touched.insert((base.to_string(), index));
+                let mut predicates = vec![condition.clone()];
+                let mut deps = BTreeSet::new();
+                for source in sources {
+                    let (n, i, _) = location(&source, &widths)?;
+                    if !touched.insert((n.to_string(), i)) {
+                        bail!("history: controlled X overlap (§3.3)")
+                    }
+                    predicates.push(read_wire(&values, &widths, &source)?);
+                    deps.insert(n.to_string());
+                }
+                for (c, _) in &controls {
+                    let (n, i, _) = location(c, &widths)?;
+                    if !touched.insert((n.to_string(), i)) {
+                        bail!("history: controlled X effective overlap (§3.3)")
+                    }
+                    deps.insert(n.to_string());
+                }
+                let new = xor(
+                    read_wire(&values, &widths, &target)?,
+                    conjunction(predicates),
+                );
+                dependencies.entry(base.into()).or_default().extend(deps);
+                if new == zero() {
+                    dependencies.remove(base);
+                }
+                write_wire(&mut values, &widths, &target, new)?;
+            }
+            "swap" | "qexch" => {
+                if args.len() != 2 || !i.lhs.is_empty() {
+                    bail!("history: exchange schema (§3.3)")
+                }
+                let mut names = args
+                    .iter()
+                    .map(|a| {
+                        if op == "swap" {
+                            wire_operand(a)
+                        } else {
+                            Ok(name(a)?.to_string())
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                names.sort();
+                let mut locations = vec![];
+                for n in &names {
+                    locations.push(if op == "swap" {
+                        let (base, index, _) = location(n, &widths)?;
+                        (base.to_string(), Some(index))
+                    } else {
+                        if !matches!(widths.get(n), Some(Type::Wire(_))) {
+                            bail!("history: bundle exchange type (§3.3)")
+                        };
+                        (n.clone(), None)
+                    });
+                }
+                if names[0] == names[1]
+                    || (op == "swap" && locations[0] == locations[1])
+                    || (op == "qexch" && widths.get(&names[0]) != widths.get(&names[1]))
+                    || control_locations.iter().any(|(base, index)| {
+                        locations
+                            .iter()
+                            .any(|(n, i)| n == base && i.is_none_or(|i| i == *index))
+                    })
+                {
+                    bail!("history: exchange width/overlap (§3.3)")
+                }
+                let prior = names
+                    .iter()
+                    .map(|n| {
+                        if op == "swap" {
+                            read_wire(&values, &widths, n)
+                        } else {
+                            read(&values, n)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let key = format!("{op}:{locations:?}:{controls:?}");
+                let (next, restores) = if condition == Term::Atom("one".into()) {
+                    (vec![prior[1].clone(), prior[0].clone()], false)
+                } else {
+                    reversible(&key, &prior, std::slice::from_ref(&condition))
+                };
+                let all_deps = locations
+                    .iter()
+                    .flat_map(|(n, _)| dependencies.get(n).into_iter().flatten().cloned())
+                    .chain(control_locations.iter().map(|(n, _)| n.clone()))
+                    .collect::<BTreeSet<_>>();
+                for (j, n) in names.iter().enumerate() {
+                    let base = &locations[j].0;
+                    let old_deps = dependencies.get(base).cloned().unwrap_or_default();
+                    let deps = if restores {
+                        producer_dependencies
+                            .get(&prior[j])
+                            .cloned()
+                            .unwrap_or_default()
+                    } else {
+                        all_deps.clone()
+                    };
+                    if !restores {
+                        producer_dependencies.insert(next[j].clone(), old_deps);
+                    }
+                    dependencies.insert(base.clone(), deps);
+                    if op == "swap" {
+                        write_wire(&mut values, &widths, n, next[j].clone())?;
+                    } else {
+                        values.insert(n.clone(), next[j].clone());
+                    }
+                }
+            }
+            "cz" => {
+                if args.len() != 2
+                    || !i.lhs.is_empty()
+                    || f.kind == crate::object::FnKind::PermAction
+                {
+                    bail!("history: CZ schema/kind (§3.3; §5.3)")
+                }
+                let names = args.iter().map(wire_operand).collect::<Result<Vec<_>>>()?;
+                let mut seen = control_locations.clone();
+                let mut operands = vec![condition.clone()];
+                for n in &names {
+                    let (base, index, _) = location(n, &widths)?;
+                    if !seen.insert((base.to_string(), index)) {
+                        bail!("history: CZ overlap (§3.3)")
+                    }
+                    operands.push(read_wire(&values, &widths, n)?);
+                }
+                if seen.iter().any(|(base, _)| borrowed.contains_key(base)) {
+                    bail!("history: non-permutation borrowed instruction (§5.6)")
+                }
+                if condition != zero() {
+                    let phase = Term::Oracle("phase:cz".into(), operands);
+                    if let Some(i) = phases.iter().rposition(|p| *p == phase) {
+                        phases.remove(i);
+                    } else {
+                        phases.push(phase);
+                    }
+                }
+            }
+            "qreturn" => {
+                if args.len() != 1 || !i.lhs.is_empty() {
+                    bail!("history: qreturn schema (§3.3)")
+                }
+                let n = name(&args[0])?;
+                let initial = borrowed
+                    .remove(n)
+                    .ok_or("history: qreturn producer (§5.6)")?;
+                if !deferred
+                    && (read(&values, n)? != initial
+                        || closed.contains(n)
+                        || values
+                            .iter()
+                            .any(|(other, value)| other != n && contains(value, &initial))
+                        || phases.iter().any(|phase| contains(phase, &initial)))
+                {
+                    bail!("history: borrowed frame does not factor as identity (§5.6)")
+                }
+                local.remove(n);
+                values.remove(n);
+                widths.remove(n);
+                types.remove(n);
+                dependencies.remove(n);
+            }
+            "qexchm" => {
+                if args.len() != 3 || !i.lhs.is_empty() {
+                    bail!("history: qexchm schema (§3.3)")
+                }
+                let region = name(&args[0])?;
+                let address = name(&args[1])?;
+                let value = name(&args[2])?;
+                let Some(Type::Region(a, w)) = widths.get(region) else {
+                    bail!("history: exchange region (§3.3)")
+                };
+                if widths.get(address) != Some(&Type::Wire(*a))
+                    || widths.get(value) != Some(&Type::Wire(*w))
+                    || address == value
+                    || control_locations
+                        .iter()
+                        .any(|(n, _)| n == address || n == value)
+                {
+                    bail!("history: memory exchange width/disjointness (§3.3)")
+                }
+                let prior = vec![read(&values, region)?, read(&values, value)?];
+                let key = format!("exchange-memory:{region}:{address}:{value}:{controls:?}");
+                let (next, _) = if condition == zero() {
+                    (prior.clone(), true)
+                } else {
+                    reversible(&key, &prior, &[read(&values, address)?, condition.clone()])
+                };
+                for (workspace, deps) in &dependencies {
+                    if deps.contains(region) {
+                        closed.insert(workspace.clone());
+                    }
+                }
+                values.insert(region.into(), next[0].clone());
+                values.insert(value.into(), next[1].clone());
+            }
+            "qstore" => {
+                if args.len() != 3 || !i.lhs.is_empty() {
+                    bail!("history: qstore schema (§3.3)")
+                }
+                let region = name(&args[0])?;
+                let address = name(&args[1])?;
+                let value = name(&args[2])?;
+                let Some(Type::Region(a, w)) = widths.get(region) else {
+                    bail!("history: qstore region (§3.3)")
+                };
+                if widths.get(address) != Some(&Type::Wire(*a))
+                    || widths.get(value) != Some(&Type::Wire(*w))
+                    || address == value
+                    || controls.iter().any(|(c, _)| {
+                        location(c, &widths).is_ok_and(|(n, _, _)| n == address || n == value)
+                    })
+                {
+                    bail!("history: qstore width/disjointness (§3.3)")
+                }
+                let context = vec![
+                    read(&values, address)?,
+                    read(&values, value)?,
+                    condition.clone(),
+                ];
+                let prior = read(&values, region)?;
+                let key = format!("store:{region}:{address}:{value}:{controls:?}");
+                let new = if read(&values, value)? == zero() || condition == zero() {
+                    prior.clone()
+                } else {
+                    match &prior {
+                        Term::Permutation(k, vs)
+                            if k == &key && vs.len() == context.len() + 1 && vs[1..] == context =>
+                        {
+                            vs[0].clone()
+                        }
+                        _ => {
+                            Term::Permutation(key, std::iter::once(prior).chain(context).collect())
+                        }
+                    }
+                };
+                // A memory write advances cell versions even if an inverse
+                // restores the value. Existing load windows stay closed.
+                for (workspace, deps) in &dependencies {
+                    if deps.contains(region) {
+                        closed.insert(workspace.clone());
+                    }
+                }
+                values.insert(region.into(), new);
+            }
             "qload" => {
                 if args.len() != 2 || i.lhs.len() != 1 {
                     bail!("history: qload arity/result (§3.3)")
@@ -330,9 +931,6 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     || controls.iter().any(|(n, _)| n == region || n == addr)
                 {
                     bail!("history: qload width/liveness/disjointness (§3.3)")
-                }
-                if quantum(&read(&values, region)?) || quantum(&read(&values, addr)?) {
-                    return Ok(false);
                 }
                 let value = Term::Oracle(
                     "load".into(),
@@ -404,8 +1002,8 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                 dependencies.remove(dst);
                 loads.remove(dst);
             }
-            "qalloc" | "qcopy" => {
-                if i.lhs.len() != 1 || args.len() != if op == "qalloc" { 2 } else { 1 } {
+            "qalloc" | "qborrow" | "qcopy" => {
+                if i.lhs.len() != 1 || args.len() != if op == "qcopy" { 1 } else { 2 } {
                     bail!("history: allocation arity (§3.3)")
                 }
                 let n = &i.lhs[0];
@@ -417,9 +1015,6 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     let value = read(&values, src)?;
                     if !matches!(widths[src], Type::Wire(_)) {
                         bail!("history: qcopy requires bundle (§3.3)")
-                    }
-                    if quantum(&value) {
-                        return Ok(false);
                     }
                     (value, widths[src].clone())
                 } else {
@@ -433,7 +1028,15 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     if w == 0 {
                         bail!("history: zero width (§3.3)")
                     }
-                    (zero(), Type::Wire(w))
+                    let initial = if op == "qborrow" {
+                        Term::Atom(format!("borrow:{n}:{next_allocation}"))
+                    } else {
+                        zero()
+                    };
+                    if op == "qborrow" {
+                        borrowed.insert(n.clone(), initial.clone());
+                    }
+                    (initial, Type::Wire(w))
                 };
                 if op == "qcopy" {
                     v = masked(v, &condition);
@@ -462,6 +1065,11 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     bail!("history: release arity (§3.3)")
                 }
                 let n = name(args.last().unwrap())?;
+                if op == "qfree"
+                    && (borrowed.contains_key(n) || copies.contains_key(n) || loads.contains_key(n))
+                {
+                    bail!("history: qfree does not match allocation producer (§6.2)")
+                }
                 if op == "quncopy" && copies.get(n).map(String::as_str) != Some(name(&args[0])?) {
                     bail!("history: quncopy producer differs (§6.2)")
                 }
@@ -491,10 +1099,55 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                 widths.remove(n);
                 types.remove(n);
             }
+            "qinplace" => {
+                let mut cf = f.clone();
+                cf.groups[0].extend(local.iter().map(|n| crate::object::Param {
+                    name: n.clone(),
+                    ty: widths[n].clone(),
+                    role: Some("mut".into()),
+                }));
+                cf.groups[2].extend(local_regions.keys().map(|n| crate::object::Param {
+                    name: n.clone(),
+                    ty: widths[n].clone(),
+                    role: Some("mut".into()),
+                }));
+                cf.blocks = vec![crate::object::Block {
+                    name: "entry".into(),
+                    params: vec![],
+                    instrs: vec![i.clone()],
+                }];
+                crate::checker::static_parameter_action(o, &cf)?;
+                let n = name(&args[3])?;
+                if controls.iter().any(|(c, _)| c == n) {
+                    bail!("history: qinplace control overlap (§3.3)")
+                }
+                // §4.5 enforces the inverse-pair side condition at invocation,
+                // before execution. This history proves cleanup for every valid
+                // invocation; it does not manufacture that covering certificate.
+                let key = format!(
+                    "qinplace:{:?}:{:?}:{:?}:{condition:?}",
+                    args[0], args[1], args[2]
+                );
+                let inverse = format!(
+                    "qinplace:{:?}:{:?}:{:?}:{condition:?}",
+                    args[1], args[0], args[2]
+                );
+                let old = read(&values, n)?;
+                let new = match &old {
+                    Term::Permutation(k, vs) if k == &inverse && vs.len() == 1 => vs[0].clone(),
+                    _ => Term::Permutation(key, vec![old]),
+                };
+                values.insert(n.into(), new);
+            }
             "oracle_call" | "action_call" => {
                 // Reuse the operand checker without discarding the history.
                 let mut cf = f.clone();
                 cf.groups[0].extend(local.iter().map(|n| crate::object::Param {
+                    name: n.clone(),
+                    ty: widths[n].clone(),
+                    role: Some("mut".into()),
+                }));
+                cf.groups[2].extend(local_regions.keys().map(|n| crate::object::Param {
                     name: n.clone(),
                     ty: widths[n].clone(),
                     role: Some("mut".into()),
@@ -523,7 +1176,9 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                     }
                 }
                 let imported = o.function(callee).is_none();
-                deferred |= imported;
+                deferred |= imported
+                    || o.function(callee)
+                        .is_some_and(|cf| crate::checker::has_opaque_reference(o, cf));
                 if op == "action_call" {
                     if imported {
                         continue;
@@ -540,6 +1195,20 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                             mutable.push(actual.clone());
                         }
                     }
+                    // An identity proof is optional refinement of the exact
+                    // call relation. If this complementary strategy cannot
+                    // prove the callee body, retain the call history; the
+                    // object's normal checker still validates every body.
+                    let identity_body =
+                        if callee_fn.kind == crate::object::FnKind::PermAction && !deferred {
+                            match evaluate(o, callee_fn, evaluation) {
+                                Ok((true, true)) => true,
+                                Err(e) if e.0.contains("call graph cycle") => return Err(e),
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        };
                     let call_value = |key: String, values: Vec<Term>| {
                         if callee_fn.kind == crate::object::FnKind::PermAction {
                             Term::Permutation(key, values)
@@ -555,9 +1224,6 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                         .chain(list(&args[3])?.iter().filter(|n| !mutable.contains(n)))
                     {
                         let value = read(&values, n)?;
-                        if quantum(&value) && local.contains(n) {
-                            closed.insert(n.clone());
-                        }
                         context.push(value);
                     }
                     let invocation_locations = mutable
@@ -588,6 +1254,27 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                             }
                         }
                     }
+                    if mutable.is_empty() && callee_fn.kind != crate::object::FnKind::PermAction {
+                        let touched = list(&args[2])?
+                            .iter()
+                            .chain(list(&args[3])?)
+                            .chain(controls.iter().map(|(n, _)| n))
+                            .collect::<BTreeSet<_>>();
+                        for (workspace, deps) in &dependencies {
+                            if deps.iter().any(|n| touched.contains(n)) {
+                                closed.insert(workspace.clone());
+                            }
+                        }
+                        let phase = Term::Apply(format!("phase:{key}"), context.clone());
+                        let inverse_phase =
+                            Term::Apply(format!("phase:{inverse}"), context.clone());
+                        if let Some(index) = phases.iter().rposition(|p| p == &inverse_phase) {
+                            phases.remove(index);
+                        } else {
+                            phases.push(phase);
+                        }
+                        continue;
+                    }
                     let candidate = prior.first().and_then(|t| {
                         if let Term::Apply(k, vs) | Term::Permutation(k, vs) = t {
                             if k == &format!("{inverse}:0") {
@@ -599,13 +1286,20 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                             None
                         }
                     });
-                    let restores = candidate.as_ref().is_some_and(|vs| {
-                        vs.len() == mutable.len() + context.len()
-                            && vs[mutable.len()..] == context
-                            && prior.iter().enumerate().all(|(j, t)| {
-                                *t == call_value(format!("{inverse}:{j}"), vs.clone())
-                            })
+                    let no_outstanding_readers = prior.iter().all(|produced| {
+                        values.iter().all(|(name, value)| {
+                            mutable.contains(name) || !contains(value, produced)
+                        }) && phases.iter().all(|phase| !contains(phase, produced))
                     });
+                    let restores = (callee_fn.kind == crate::object::FnKind::PermAction
+                        || no_outstanding_readers)
+                        && candidate.as_ref().is_some_and(|vs| {
+                            vs.len() == mutable.len() + context.len()
+                                && vs[mutable.len()..] == context
+                                && prior.iter().enumerate().all(|(j, t)| {
+                                    *t == call_value(format!("{inverse}:{j}"), vs.clone())
+                                })
+                        });
                     let all = prior.iter().cloned().chain(context).collect::<Vec<_>>();
                     let touched = mutable
                         .iter()
@@ -636,6 +1330,9 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                         }
                     }
 
+                    if identity_body {
+                        continue;
+                    }
                     for (j, n) in mutable.iter().enumerate() {
                         let old_deps = dependencies.get(n).cloned().unwrap_or_default();
                         let new = if restores {
@@ -672,9 +1369,6 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                 ];
                 for n in list(&args[2])?.iter().chain(list(&args[5])?) {
                     let value = read(&values, n)?;
-                    if quantum(&value) && local.contains(n) {
-                        closed.insert(n.clone());
-                    }
                     inputs.push(value);
                 }
                 for (slot, a) in [("target", &args[3]), ("fault", &args[4])] {
@@ -707,9 +1401,6 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                 if a == b || widths.get(a) != widths.get(b) {
                     bail!("history: overlap/width (§3.3)")
                 }
-                if quantum(&read(&values, a)?) {
-                    return Ok(false);
-                }
                 let new = xor(masked(read(&values, a)?, &condition), read(&values, b)?);
                 let deps = dependencies.entry(b.into()).or_default();
                 deps.insert(a.into());
@@ -721,33 +1412,64 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
             }
             _ => {
                 if adj {
-                    return Ok(false);
+                    return Ok((false, false));
                 }
                 let rotation = matches!(op, "rx" | "ry" | "rz");
                 if args.len() != if rotation { 2 } else { 1 } || !i.lhs.is_empty() {
                     bail!("history: gate arity (§3.3)")
                 }
-                let n = name(args.last().unwrap())?;
-                if widths.get(n) != Some(&Type::Wire(1)) {
-                    bail!("history: gate requires wire (§3.3)")
-                }
-                if controls.iter().any(|(c, _)| c == n) {
+                let wire = wire_operand(args.last().unwrap())?;
+                let n = wire.as_str();
+                let (base, index, width) = location(n, &widths)?;
+                let canonical = if width == 1 {
+                    base.to_string()
+                } else {
+                    format!("{base}[{index}]")
+                };
+                let n = canonical.as_str();
+                if controls.iter().any(|(c, _)| {
+                    location(c, &widths).is_ok_and(|(b, i, _)| b == base && i == index)
+                }) {
                     bail!("history: effective control overlaps target (§3.3)")
                 }
-                let old = read(&values, n)?;
+                if op != "x"
+                    && (borrowed.contains_key(base)
+                        || controls.iter().any(|(c, _)| {
+                            location(c, &widths).is_ok_and(|(b, _, _)| borrowed.contains_key(b))
+                        }))
+                {
+                    bail!("history: non-permutation instruction touches borrowed wires (§5.6)")
+                }
+                let old = read_wire(&values, &widths, n)?;
+                if !matches!(op, "s" | "sdg" | "t" | "tdg" | "rz")
+                    && quantum(&old)
+                    && (values.iter().any(|(other, value)| {
+                        if other != base {
+                            contains(value, &old)
+                        } else {
+                            (0..width)
+                                .filter(|i| *i != index)
+                                .any(|i| contains(&bit(value, i), &old))
+                        }
+                    }) || phases.iter().any(|phase| contains(phase, &old)))
+                {
+                    closed.insert(base.into());
+                }
                 if f.kind == crate::object::FnKind::PermAction && op != "x" {
                     bail!("history: nonpermutation gate (§5.3)")
                 }
                 if matches!(op, "h" | "rx" | "ry") {
                     for (w, deps) in &dependencies {
-                        if w != n && deps.contains(n) && values.get(w).is_some_and(|v| *v != zero())
+                        if w != base
+                            && deps.contains(base)
+                            && values.get(w).is_some_and(|v| *v != zero())
                         {
                             closed.insert(w.clone());
                         }
                     }
 
                     for (copy, src) in &copies {
-                        if src == n {
+                        if src == base {
                             closed.insert(copy.clone());
                         }
                     }
@@ -760,41 +1482,72 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                         _ => bail!("history: angle type (§3.3)"),
                     }
                 }
-                let key = if rotation {
-                    format!(
-                        "{op}:{:?}:{condition:?}:wire:{n}:{}",
-                        args[0],
-                        allocation_ids.get(n).copied().unwrap_or(u64::MAX)
-                    )
+                let (angle_key, inverse_angle) = if rotation {
+                    match &args[0] {
+                        Operand::Name(name) => (format!("arg:{name}"), format!("neg-arg:{name}")),
+                        Operand::Int(text) | Operand::Float(text) => {
+                            let value = text
+                                .parse::<f64>()
+                                .map_err(|_| Error("history: angle (§3.3)".into()))?;
+                            if value == 0. {
+                                continue;
+                            }
+                            (
+                                format!("bits:{:016x}", value.to_bits()),
+                                format!("bits:{:016x}", (-value).to_bits()),
+                            )
+                        }
+                        _ => bail!("history: angle (§3.3)"),
+                    }
                 } else {
-                    format!(
-                        "{op}:{condition:?}:wire:{n}:{}",
-                        allocation_ids.get(n).copied().unwrap_or(u64::MAX)
-                    )
+                    (String::new(), String::new())
                 };
-                let inverse = match op {
-                    "sdg" => "s",
+                let inverse_op = match op {
                     "s" => "sdg",
-                    "tdg" => "t",
+                    "sdg" => "s",
                     "t" => "tdg",
+                    "tdg" => "t",
                     _ => op,
                 };
+                let key = format!(
+                    "{op}:{angle_key}:{condition:?}:wire:{n}:{}",
+                    allocation_ids.get(base).copied().unwrap_or(u64::MAX)
+                );
                 let inverse = format!(
-                    "{inverse}:{condition:?}:wire:{n}:{}",
-                    allocation_ids.get(n).copied().unwrap_or(u64::MAX)
+                    "{inverse_op}:{inverse_angle}:{condition:?}:wire:{n}:{}",
+                    allocation_ids.get(base).copied().unwrap_or(u64::MAX)
                 );
                 let diagonal = matches!(op, "s" | "sdg" | "t" | "tdg" | "rz");
-                // T5 phases on basis expressions do not alter their value;
-                // phases on quantum histories must remain in that history.
-                if diagonal && !quantum(&old) {
+                // Retain diagonal phases separately from basis values. Exact
+                // inverse phases cancel with multiplicity; a phase depending
+                // on a borrowed system or an other producer cannot disappear
+                // merely because that producer's bit expression is restored.
+                if diagonal {
+                    if condition == zero() || (op != "rz" && old == zero()) {
+                        continue;
+                    }
+                    let phase = Term::Apply(
+                        format!("phase:{op}:{angle_key}"),
+                        vec![old.clone(), condition.clone()],
+                    );
+                    let inverse_phase = Term::Apply(
+                        format!("phase:{inverse_op}:{inverse_angle}"),
+                        vec![old.clone(), condition.clone()],
+                    );
+                    if let Some(index) = phases.iter().rposition(|p| p == &inverse_phase) {
+                        phases.remove(index);
+                    } else {
+                        phases.push(phase);
+                    }
                     continue;
                 }
-                let old_deps = dependencies.get(n).cloned().unwrap_or_default();
-                let restores = matches!(&old,Term::Apply(prior,vs)if !rotation && prior==&inverse && vs.len()==1);
+                let old_deps = dependencies.get(base).cloned().unwrap_or_default();
+                let restores =
+                    matches!(&old,Term::Apply(prior,vs)if prior==&inverse && vs.len()==1);
                 let new = if op == "x" {
                     xor(old.clone(), condition.clone())
                 } else if let Term::Apply(prior, vs) = &old {
-                    if !rotation && prior == &inverse && vs.len() == 1 {
+                    if prior == &inverse && vs.len() == 1 {
                         vs[0].clone()
                     } else {
                         Term::Apply(key, vec![old.clone()])
@@ -815,13 +1568,26 @@ pub(crate) fn verify(o: &Object, f: &Function) -> Result<bool> {
                 if new == zero() {
                     deps.clear();
                 }
-                dependencies.insert(n.into(), deps);
-                values.insert(n.into(), new);
+                dependencies.insert(base.into(), deps);
+                write_wire(&mut values, &widths, n, new)?;
             }
         }
+    }
+    if !deferred
+        && local_regions
+            .iter()
+            .any(|(n, initial)| values.get(n) != Some(initial))
+    {
+        bail!("history: local region not restored to its image (§4.6; §6.2)")
     }
     if !local.is_empty() {
         bail!("history: live workspace at exit (§5.1/§6.2)")
     }
-    Ok(true)
+    let identity = !deferred
+        && phases.is_empty()
+        && f.groups[..3]
+            .iter()
+            .flatten()
+            .all(|p| values.get(&p.name) == Some(&Term::Atom(p.name.clone())));
+    Ok((true, identity))
 }

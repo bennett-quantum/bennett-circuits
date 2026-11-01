@@ -93,6 +93,144 @@ fn rebind(v: &Value, m: &BTreeMap<String, String>) -> Value {
     }
     walk(v, m, "")
 }
+/// Claim arrays are local to their region; external library witnesses carry
+/// an explicit region hash. Shift both kinds before concatenating proof DAGs.
+fn shift_record(region: &Value, offset: usize, offsets: &BTreeMap<String, usize>) -> Result<Value> {
+    let bump = |v: &mut Value, offset: usize| -> Result<()> {
+        let index = v.as_u64().ok_or("link: claim index")?;
+        *v = Value::Int(
+            index
+                .checked_add(offset as u64)
+                .ok_or("link: claim index overflow")?
+                .to_string(),
+        );
+        Ok(())
+    };
+    let mut region = region.clone();
+    let Value::Object(record) = &mut region else {
+        bail!("link: region record")
+    };
+    let Value::Array(claims) = record.get_mut("claims").ok_or("link: claims")? else {
+        bail!("link: claims array")
+    };
+    for claim in claims {
+        let Value::Object(claim) = claim else {
+            bail!("link: claim record")
+        };
+        if let Some(Value::Array(deps)) = claim.get_mut("subclaims") {
+            for index in deps {
+                bump(index, offset)?;
+            }
+        }
+        if claim.get("rule").and_then(Value::as_str) == Some("inverse_pair_library") {
+            let Some(Value::Object(witness)) = claim.get_mut("witness") else {
+                bail!("link: library witness")
+            };
+            let hash = witness
+                .get("library_closure_hash")
+                .and_then(Value::as_str)
+                .ok_or("link: library hash")?;
+            let library_offset = offsets.get(hash).copied().unwrap_or(0);
+            bump(
+                witness
+                    .get_mut("claim_index")
+                    .ok_or("link: library claim")?,
+                library_offset,
+            )?;
+        }
+    }
+    let Some(Value::Object(verification)) = record.get_mut("verification") else {
+        bail!("link: verification record")
+    };
+    for (key, value) in verification {
+        match key.as_str() {
+            "oracle" => bump(value, offset)?,
+            "borrow_frames" | "unitary" | "channel" => {
+                let Value::Array(indices) = value else {
+                    bail!("link: verification indices")
+                };
+                for index in indices {
+                    bump(index, offset)?;
+                }
+            }
+            "inverse_pairs" => {
+                let Value::Array(pairs) = value else {
+                    bail!("link: inverse pairs")
+                };
+                for pair in pairs {
+                    let Value::Object(pair) = pair else {
+                        bail!("link: inverse pair record")
+                    };
+                    bump(
+                        pair.get_mut("claim").ok_or("link: inverse pair claim")?,
+                        offset,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(region)
+}
+fn merge_record(old: &mut Value, incoming: &Value) -> Result<()> {
+    let Value::Object(old) = old else {
+        bail!("link: region record")
+    };
+    let new = incoming.as_object().ok_or("link: region record")?;
+    let fields = |m: &BTreeMap<String, Value>| {
+        m.iter()
+            .filter(|(k, _)| !matches!(k.as_str(), "claims" | "verification"))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<BTreeMap<_, _>>()
+    };
+    if fields(old) != fields(new) {
+        bail!("link: incompatible frame/resources for equal closure (§12.3)")
+    }
+    let Value::Array(claims) = old.get_mut("claims").ok_or("link: claims")? else {
+        bail!("link: claims array")
+    };
+    claims.extend(
+        new.get("claims")
+            .and_then(Value::as_array)
+            .ok_or("link: claims array")?
+            .iter()
+            .cloned(),
+    );
+    let Value::Object(verification) = old.get_mut("verification").ok_or("link: verification")?
+    else {
+        bail!("link: verification record")
+    };
+    for (key, value) in new
+        .get("verification")
+        .and_then(Value::as_object)
+        .ok_or("link: verification record")?
+    {
+        match verification.get_mut(key) {
+            None => {
+                verification.insert(key.clone(), value.clone());
+            }
+            Some(old)
+                if matches!(
+                    key.as_str(),
+                    "borrow_frames" | "unitary" | "channel" | "inverse_pairs"
+                ) =>
+            {
+                let Value::Array(old) = old else {
+                    bail!("link: verification array")
+                };
+                for index in value.as_array().ok_or("link: verification array")? {
+                    if !old.contains(index) {
+                        old.push(index.clone());
+                    }
+                }
+            }
+            Some(_) if key == "oracle" => {} // Both relation claims are retained and replayed.
+            Some(old) if old == value => {}
+            Some(_) => bail!("link: incompatible verification {key} (§12.3)"),
+        }
+    }
+    Ok(())
+}
 impl Registry {
     pub fn link(root: &Object, libraries: &[Object]) -> Result<Self> {
         let mut linked = root.clone();
@@ -182,7 +320,7 @@ impl Registry {
         }
 
         let mut composed = None::<Value>;
-        let mut records = BTreeMap::new();
+        let mut records = BTreeMap::<String, Value>::new();
         let mut coverage = vec![];
         for source in std::iter::once(root).chain(libraries) {
             linked.draft_encodings |= source.draft_encodings;
@@ -220,17 +358,32 @@ impl Registry {
                     }
                 }
             }
-            for (h, r) in cert
+            let regions = cert
                 .get("regions")
                 .and_then(Value::as_object)
-                .ok_or("link: certificate regions (§12.3)")?
-            {
-                if let Some(old) = records.insert(h.clone(), r.clone())
-                    && old != *r
-                {
-                    bail!(
-                        "unimplemented: composition of distinct certificates for equal closure; bennett-circuits-4pf (§12.3)"
-                    )
+                .ok_or("link: certificate regions (§12.3)")?;
+            let mut offsets = BTreeMap::new();
+            for (h, region) in regions {
+                let offset = match records.get(h) {
+                    Some(old) if old == region => 0,
+                    Some(old) => old
+                        .get("claims")
+                        .and_then(Value::as_array)
+                        .ok_or("link: previous claims array")?
+                        .len(),
+                    None => 0,
+                };
+                offsets.insert(h.clone(), offset);
+            }
+            for (h, region) in regions {
+                if records.get(h) == Some(region) {
+                    continue;
+                }
+                let shifted = shift_record(region, offsets[h], &offsets)?;
+                if let Some(old) = records.get_mut(h) {
+                    merge_record(old, &shifted)?;
+                } else {
+                    records.insert(h.clone(), shifted);
                 }
             }
             composed.get_or_insert(cert);

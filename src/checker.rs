@@ -1235,6 +1235,47 @@ fn translation_frame(flat: &Flat, b: &BTreeSet<usize>) -> Result<()> {
     if b.is_empty() {
         return Ok(());
     }
+    let mut known = vec![None; flat.num_qubits];
+    for q in &flat.workspace {
+        if !b.contains(q) {
+            known[*q] = Some(false);
+        }
+    }
+    let mut gates = vec![];
+    for g in &flat.gates {
+        if g.controls
+            .iter()
+            .any(|(q, polarity)| known[*q].is_some_and(|v| v != *polarity))
+        {
+            continue;
+        }
+        let enabled = g
+            .controls
+            .iter()
+            .all(|(q, polarity)| known[*q] == Some(*polarity));
+        match g.gate {
+            BaseGate::X => {
+                known[g.targets[0]] = if enabled {
+                    known[g.targets[0]].map(|v| !v)
+                } else {
+                    None
+                };
+            }
+            BaseGate::Swap if enabled => known.swap(g.targets[0], g.targets[1]),
+            BaseGate::S
+            | BaseGate::Sdg
+            | BaseGate::T
+            | BaseGate::Tdg
+            | BaseGate::Cz
+            | BaseGate::Rz(_) => {}
+            _ => {
+                for q in &g.targets {
+                    known[*q] = None;
+                }
+            }
+        }
+        gates.push(g.clone());
+    }
     let touches = |g: &FlatGate| {
         g.targets
             .iter()
@@ -1242,14 +1283,14 @@ fn translation_frame(flat: &Flat, b: &BTreeSet<usize>) -> Result<()> {
             .any(|q| b.contains(q))
     };
     let mut start = 0;
-    for end in 0..=flat.gates.len() {
-        if end < flat.gates.len() && matches!(flat.gates[end].gate, BaseGate::X | BaseGate::Swap) {
+    for end in 0..=gates.len() {
+        if end < gates.len() && matches!(gates[end].gate, BaseGate::X | BaseGate::Swap) {
             continue;
         }
-        if end < flat.gates.len() && touches(&flat.gates[end]) {
+        if end < gates.len() && touches(&gates[end]) {
             bail!("checker: non-permutation instruction touches borrowed wires (§5.6)");
         }
-        translation_component(&flat.gates[start..end], b)?;
+        translation_component(&gates[start..end], b)?;
         start = end + 1;
     }
     Ok(())
@@ -1291,7 +1332,28 @@ pub(crate) fn translation_component(gates: &[FlatGate], b: &BTreeSet<usize>) -> 
         let w = &frame[vlen..vlen + wlen];
         let inv = &frame[vlen + wlen..2 * vlen + wlen];
         let w2 = &frame[2 * vlen + wlen..];
-        if !v.iter().rev().eq(inv.iter()) || w != w2 {
+        // V flips B under controls in immutable X, so its flips commute.
+        // W's targets are disjoint from all W controls (checked below), so
+        // those flips commute too. Bundle self-adjoints may retain bit order.
+        let same_flips = |left: &[FlatGate], right: &[FlatGate]| {
+            let mut remaining = right.iter().collect::<Vec<_>>();
+            for gate in left {
+                let mut controls = gate.controls.clone();
+                controls.sort();
+                let Some(index) = remaining.iter().position(|other| {
+                    let mut other_controls = other.controls.clone();
+                    other_controls.sort();
+                    gate.gate == other.gate
+                        && gate.targets == other.targets
+                        && controls == other_controls
+                }) else {
+                    return false;
+                };
+                remaining.remove(index);
+            }
+            remaining.is_empty()
+        };
+        if !same_flips(v, inv) || !same_flips(w, w2) {
             continue;
         }
         let controls = w
@@ -1439,7 +1501,7 @@ pub fn validate(o: &Object) -> Result<()> {
     Ok(())
 }
 
-fn has_opaque_reference(o: &Object, f: &Function) -> bool {
+pub(crate) fn has_opaque_reference(o: &Object, f: &Function) -> bool {
     let mut pending = vec![f];
     let mut seen = BTreeSet::new();
     while let Some(f) = pending.pop() {
@@ -1460,6 +1522,137 @@ fn has_opaque_reference(o: &Object, f: &Function) -> bool {
         }
     }
     false
+}
+
+fn action_call_operands(i: &Instr) -> Option<(&str, &[Operand])> {
+    let mut op = i.opcode.as_str();
+    let mut args = i.operands.as_slice();
+    while matches!(op, "ctl" | "adj") {
+        let offset = usize::from(op == "ctl");
+        let Operand::Name(next) = args.get(offset)? else {
+            return None;
+        };
+        op = next;
+        args = &args[offset + 1..];
+    }
+    if op != "action_call" || args.len() != 5 {
+        return None;
+    }
+    let Operand::Sym(name) = &args[0] else {
+        return None;
+    };
+    Some((name, args))
+}
+fn action_parameter_uses(o: &Object) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut used = o
+        .functions
+        .iter()
+        .filter(|f| f.is_action())
+        .map(|f| (f.name.clone(), BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    // Validate every original argument tuple without needing a concrete token
+    // or the contents of caller workspace. Quantum locals get their expected
+    // interface types here; ordinary lowering still checks their actual types
+    // and lifetimes after this independent classical validation.
+    for f in o.functions.iter().filter(|f| f.is_action()) {
+        for i in all(f) {
+            let Some((name, args)) = action_call_operands(i) else {
+                continue;
+            };
+            let callee = callee_contract(o, name)?;
+            let mut context = f.clone();
+            let mut names = f
+                .groups
+                .iter()
+                .flatten()
+                .map(|p| p.name.clone())
+                .collect::<BTreeSet<_>>();
+            for (actual, formal_group, caller_group) in [(1, 0, 0), (2, 1, 1), (3, 2, 2)] {
+                let Operand::List(arguments) = &args[actual] else {
+                    bail!("checker: action list (§3.3)")
+                };
+                if arguments.len() != callee.groups[formal_group].len() {
+                    bail!("checker: action interface arity (§3.3)")
+                }
+                for (name, param) in arguments.iter().zip(&callee.groups[formal_group]) {
+                    if names.insert(name.clone()) {
+                        context.groups[caller_group].push(Param {
+                            name: name.clone(),
+                            ty: param.ty.clone(),
+                            role: if caller_group == 2 {
+                                Some("mut".into())
+                            } else {
+                                None
+                            },
+                        });
+                    }
+                }
+            }
+            context.blocks = vec![Block {
+                name: "entry".into(),
+                params: vec![],
+                instrs: vec![Instr {
+                    lhs: i.lhs.clone(),
+                    opcode: "action_call".into(),
+                    operands: args.to_vec(),
+                    children: vec![],
+                }],
+            }];
+            static_parameter_action(o, &context)?;
+        }
+    }
+    loop {
+        let previous = used.clone();
+        for f in o.functions.iter().filter(|f| f.is_action()) {
+            let parameters = f.groups[3]
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<BTreeSet<_>>();
+            let mut mark = |name: &str| {
+                if parameters.contains(name) {
+                    used.get_mut(&f.name).unwrap().insert(name.into());
+                }
+            };
+            for i in all(f) {
+                let call = action_call_operands(i);
+                // Modifiers and quantum actuals must still retain any formal
+                // classical use, including malformed uses caught by lowering.
+                for (index, arg) in i.operands.iter().enumerate() {
+                    if call.is_some() && index + 1 == i.operands.len() {
+                        continue;
+                    }
+                    match arg {
+                        Operand::Name(n) | Operand::Indexed(n, _) => mark(n),
+                        Operand::List(ns) => {
+                            for n in ns {
+                                mark(n)
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some((name, args)) = call {
+                    let Operand::List(arguments) = &args[4] else {
+                        bail!("checker: classical argument list (§3.3)")
+                    };
+                    if let Some(callee) = o.function(name) {
+                        for (argument, param) in arguments.iter().zip(&callee.groups[3]) {
+                            if previous[name].contains(&param.name) {
+                                mark(argument);
+                            }
+                        }
+                    } else {
+                        for argument in arguments {
+                            mark(argument);
+                        }
+                    }
+                }
+            }
+        }
+        if used == previous {
+            return Ok(used);
+        }
+    }
 }
 
 /// Erase only parameters syntactically absent from this computation.
@@ -1485,33 +1678,55 @@ fn parameter_independent_action(o: &Object, f: &Function) -> Result<bool> {
             }
         }
     }
-    let mut used = BTreeSet::new();
-    for i in all(f) {
-        for a in &i.operands {
-            match a {
-                Operand::Name(n) | Operand::Indexed(n, _) => {
-                    used.insert(n.as_str());
-                }
-                Operand::List(ns) => {
-                    used.extend(ns.iter().map(String::as_str));
-                }
-                _ => {}
-            }
-        }
-    }
+    // Classical values passed only into transitively unused parameters are
+    // universally irrelevant too. Validate the original bindings before
+    // erasing them, so dead-argument elimination cannot hide a type error.
+    let used = action_parameter_uses(o)?;
     if f.groups[3]
         .iter()
-        .any(|p| p.ty != Type::F64 && used.contains(p.name.as_str()))
+        .any(|p| p.ty != Type::F64 && used[&f.name].contains(&p.name))
     {
         return Ok(false);
     }
     let mut independent = o.clone();
+    for function in &mut independent.functions {
+        if function.is_action() {
+            function.groups[3].retain(|p| used[&function.name].contains(&p.name));
+            fn erase(
+                instructions: &mut [Instr],
+                o: &Object,
+                used: &BTreeMap<String, BTreeSet<String>>,
+            ) {
+                for instruction in instructions {
+                    if let Some((name, _)) = action_call_operands(instruction) {
+                        let name = name.to_string();
+                        if let Some(callee) = o.function(&name)
+                            && let Some(Operand::List(arguments)) = instruction.operands.last_mut()
+                        {
+                            let old = std::mem::take(arguments);
+                            *arguments = old
+                                .into_iter()
+                                .zip(&callee.groups[3])
+                                .filter(|(_, p)| used[&name].contains(&p.name))
+                                .map(|(a, _)| a)
+                                .collect();
+                        }
+                    }
+                    for child in &mut instruction.children {
+                        erase(child, o, used);
+                    }
+                }
+            }
+            for block in &mut function.blocks {
+                erase(&mut block.instrs, o, &used);
+            }
+        }
+    }
     let cf = independent
         .functions
-        .iter_mut()
+        .iter()
         .find(|cf| cf.name == f.name)
         .unwrap();
-    cf.groups[3].retain(|p| p.ty == Type::F64 && used.contains(p.name.as_str()));
     let cf = cf.clone();
     if cf.groups[3].is_empty() {
         let program = crate::lower::lower_program(&independent, &cf.name)?;

@@ -355,7 +355,11 @@ fn certificates_replayed_against_reference_cli() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         eprintln!("M4 DRAFT DIFFERENTIAL {command}: {stderr}");
         assert!(!output.status.success());
-        assert!(stderr.contains("certificate version mismatch"), "{stderr}");
+        assert!(
+            stderr.contains("certificate version mismatch")
+                || stderr.contains("§9.4 frame (frame): §9.1: missing field interface"),
+            "{stderr}"
+        );
     }
 }
 #[test]
@@ -938,10 +942,15 @@ fn every_oracle_certificate_row_replays_with_arbitrary_targets_and_faults() {
             .output()
             .unwrap();
         assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("certificate version mismatch"));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("certificate version mismatch")
+                || stderr.contains("§9.4 frame (frame): §9.1: missing field interface"),
+            "{stderr}"
+        );
     }
     eprintln!(
-        "M4 ORACLE CERTIFICATE: 64 full tuples agree, including arbitrary target/fault; draft check/hash stop at version boundary"
+        "M4 ORACLE CERTIFICATE: 64 full tuples agree, including arbitrary target/fault; draft check/hash stop at the version/schema boundary"
     );
 }
 #[test]
@@ -1162,4 +1171,388 @@ fn linking_preserves_a_certificate_subject_instead_of_guessing_an_entry() {
             .as_str(),
         Some(hash.as_str())
     );
+}
+#[test]
+fn symbolic_borrow_frames_retain_controlled_phases_and_transferred_dependence() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\noracle_call @o tk (x) t fr () ()\n";
+    for body in [
+        "b = qborrow any 1\nqpred b\ns t\nqunpred b\nqreturn b\n",
+        "b = qborrow any 1\ncx b t\nqreturn b\n",
+    ] {
+        assert!(
+            object(&format!("{prefix}{body}")).hash().is_err(),
+            "borrow leaked phase/dependence: {body}"
+        );
+    }
+    object(&format!(
+        "{prefix}b = qborrow any 1\ncx x b\ncx b t\ncx x b\ncx b t\nqreturn b\n"
+    ))
+    .hash()
+    .unwrap();
+}
+#[test]
+fn quantum_copies_clean_before_the_source_adjoint_for_all_token_values() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) () () (tk:token) ()\n^entry():\nc = qalloc any 1\nh c\n";
+    let body = "d = qcopy c\noracle_call @o tk (d) t fr () ()\noracle_call @o tk (d) t fr () ()\nquncopy c d\nh c\nqfree c\n";
+    object(&format!("{prefix}{body}")).hash().unwrap();
+    let bad = body.replacen("oracle_call @o tk (d) t fr () ()\n", "", 1);
+    assert!(object(&format!("{prefix}{bad}")).hash().is_err());
+}
+#[test]
+fn nested_borrow_lifetimes_have_distinct_full_domain_positions() {
+    let o=object("perm_action @leaf (y:wire mut) (x:wire in) () () ()\n^entry():\nb = qborrow any 1\ncx x b\ncx b y\ncx x b\ncx b y\nqreturn b\nperm_action @root (y:wire mut) (x:wire in) () () ()\n^entry():\naction_call @leaf (y) (x) () ()\naction_call @leaf (y) (x) () ()\n").materialize().unwrap();
+    let cert =
+        bennett_circuits::certificate::generate(&o, "root", &[], None, true, &context(&target()))
+            .unwrap();
+    let region = cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    let claim = &region.get("claims").unwrap().as_array().unwrap()[0];
+    let borrowed = claim
+        .get("domain")
+        .unwrap()
+        .get("borrowed")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(borrowed.len(), 2);
+    assert_ne!(borrowed[0].get("name"), borrowed[1].get("name"));
+    assert_eq!(
+        claim
+            .get("expected")
+            .unwrap()
+            .get("table")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        16
+    );
+    let mut bound = o;
+    bound.draft_encodings = true;
+    bound.certificate = Some(cert);
+    bound.check().unwrap();
+}
+#[test]
+fn linking_composes_distinct_proofs_for_the_same_closure_and_reindexes_claims() {
+    let mut a = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\n")
+        .materialize()
+        .unwrap();
+    let mut b = a.clone();
+    let h = a.hash().unwrap().symbols["a"].closure_hash.clone().unwrap();
+    a.draft_encodings = true;
+    b.draft_encodings = true;
+    a.certificate = Some(
+        bennett_circuits::certificate::generate(&a, "a", &[], None, true, &context(&target()))
+            .unwrap(),
+    );
+    b.certificate = Some(
+        bennett_circuits::certificate::generate_program(
+            &b,
+            "a",
+            &[],
+            None,
+            true,
+            &context(&target()),
+            &h,
+        )
+        .unwrap(),
+    );
+    if let Value::Object(record) = region_mut(b.certificate.as_mut().unwrap())
+        .get_mut("claims")
+        .unwrap()
+        .as_array()
+        .unwrap()[1]
+        .clone()
+    {
+        let mut claim = record;
+        claim.insert(
+            "subclaims".into(),
+            Value::Array(vec![Value::Int("0".into())]),
+        );
+        let Value::Array(claims) = region_mut(b.certificate.as_mut().unwrap())
+            .get_mut("claims")
+            .unwrap()
+        else {
+            panic!()
+        };
+        claims[1] = Value::Object(claim);
+    }
+    let registry = link(&a, &[b]).unwrap();
+    let record = registry
+        .object
+        .certificate
+        .as_ref()
+        .unwrap()
+        .get("regions")
+        .unwrap()
+        .get(&h)
+        .unwrap();
+    assert_eq!(record.get("claims").unwrap().as_array().unwrap().len(), 4);
+    assert_eq!(
+        record.get("claims").unwrap().as_array().unwrap()[3]
+            .get("subclaims")
+            .unwrap(),
+        &Value::Array(vec![Value::Int("2".into())])
+    );
+    registry.object.check().unwrap();
+}
+#[test]
+fn indexed_histories_restore_joint_calls_and_check_each_wire() {
+    let prefix = "perm_action @touch (q:wire[2] mut) () () (unused:token) ()\n^entry():\nx q[1]\naction @a () () () (tk:token) ()\n^entry():\nd = qalloc any 2\nh d[0]\naction_call @touch (d) () () (tk)\nadj action_call @touch (d) () () (tk)\n";
+    object(&format!("{prefix}h d[0]\nqfree d\n"))
+        .hash()
+        .unwrap();
+    assert!(
+        object(&format!("{prefix}h d[1]\nqfree d\n"))
+            .hash()
+            .is_err()
+    );
+}
+#[test]
+fn symbolic_while_flags_keep_indexed_selectors_current() {
+    let source = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in, p:wire[2] in) () (tk:token) ()\nregs { } bounds {2}\n^entry():\nd = qcopy x\nqloop 2 while p {\noracle_call @o tk (d) t fr () ()\noracle_call @o tk (d) t fr () ()\n}\nquncopy x d\n";
+    object(source).hash().unwrap();
+}
+#[test]
+fn symbolic_memory_updates_restore_values_but_advance_load_versions() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in, addr:wire in, v:wire in) (r:region[1,1] mut) (tk:token) ()\n^entry():\n";
+    let calls = "oracle_call @o tk (x) t fr () ()\n";
+    object(&format!(
+        "{prefix}qstore r addr v\nqstore r addr v\nd = qload r addr\n{calls}qunload r addr d\n"
+    ))
+    .hash()
+    .unwrap();
+    assert!(
+        object(&format!(
+            "{prefix}d = qload r addr\nqstore r addr v\nqstore r addr v\n{calls}qunload r addr d\n"
+        ))
+        .hash()
+        .unwrap_err()
+        .0
+        .contains("§6.2")
+    );
+}
+#[test]
+fn symbolic_gate_pairs_and_quantum_phases_span_unrelated_calls() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in, p:wire[2] in) () (tk:token) ()\n^entry():\nd = qalloc any 2\nh d[0]\n";
+    let call = "oracle_call @o tk (x) t fr () ()\n";
+    for (forward, inverse) in [
+        ("s d[0]\n", "sdg d[0]\n"),
+        ("rx 0.125 d[0]\n", "rx -0.125 d[0]\n"),
+        ("ry 0.125 d[0]\n", "ry -0.125 d[0]\n"),
+        ("rz 0.125 d[0]\n", "rz -0.125 d[0]\n"),
+        ("swap d[0] d[1]\n", "swap d[0] d[1]\n"),
+        ("cz d[0] x\n", "cz d[0] x\n"),
+        (
+            "mcx (d[0], p[0], p[1]) d[1]\n",
+            "mcx (d[0], p[0], p[1]) d[1]\n",
+        ),
+    ] {
+        let source = format!("{prefix}{forward}{call}{inverse}h d[0]\nqfree d\n");
+        object(&source)
+            .hash()
+            .unwrap_or_else(|e| panic!("{forward}: {e}"));
+        assert!(
+            object(&format!("{prefix}{forward}{call}h d[0]\nqfree d\n"))
+                .hash()
+                .is_err(),
+            "{forward}"
+        );
+    }
+}
+#[test]
+fn translation_witnesses_cover_bundle_flips_and_indexed_controls() {
+    let o=object("perm_action @a (y:wire[2] mut) (x:wire[2] in, p:wire in) () () ()\n^entry():\nb = qborrow any 2\nqpred p\nqxor x b\nqxor b y\nqxor x b\nqxor b y\nqunpred p\nqreturn b\n").materialize().unwrap();
+    let cert =
+        bennett_circuits::certificate::generate(&o, "a", &[], None, true, &context(&target()))
+            .unwrap();
+    let claims = cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .get("claims")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let witness = claims
+        .iter()
+        .find(|c| c.get("rule").and_then(Value::as_str) == Some("translation_lemma"))
+        .unwrap()
+        .get("witness")
+        .unwrap();
+    assert_eq!(witness.get("V").unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(witness.get("B").unwrap().as_array().unwrap().len(), 2);
+    assert!(
+        witness
+            .get("X")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .contains(&Value::Str("p".into()))
+    );
+    let mut bound = o;
+    bound.draft_encodings = true;
+    bound.certificate = Some(cert);
+    bound.check().unwrap();
+}
+#[test]
+fn symbolic_local_regions_are_lexical_and_restore_their_images() {
+    let source = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in, addr:wire in) () (tk:token) ()\nregs { } bounds {0}\n^entry():\nd = qload r addr\noracle_call @o tk (x) t fr () ()\nqunload r addr d\nqloop 0 {\nqregion r 1 1\n}\n";
+    object(source).hash().unwrap();
+    let bad = source.replace("qunload r addr d", "qunload r addr d\nqstore r addr x");
+    assert!(object(&bad).hash().is_err());
+}
+#[test]
+fn symbolic_memory_exchanges_match_joint_outputs_and_close_cell_windows() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut, v:wire mut) (x:wire in, addr:wire in) (r:region[1,1] mut) (tk:token) ()\n^entry():\n";
+    let middle = "qexchm r addr v\noracle_call @o tk (x) t fr () ()\nqexchm r addr v\n";
+    object(&format!("{prefix}d = qcopy x\n{middle}quncopy x d\n"))
+        .hash()
+        .unwrap();
+    assert!(
+        object(&format!(
+            "{prefix}d = qload r addr\n{middle}qunload r addr d\n"
+        ))
+        .hash()
+        .unwrap_err()
+        .0
+        .contains("§6.2")
+    );
+}
+#[test]
+fn pending_obligations_follow_transitive_calls_and_replay_the_linked_body() {
+    let leaf =
+        object("perm_action @leaf (x:wire mut) () () (unused:token) ()\n^entry():\nx x\nx x\n");
+    let mut root = object(
+        "perm_action @middle (x:wire mut) () () (tk:token) ()\n^entry():\naction_call @leaf (x) () () (tk)\naction @root (x:wire mut) () () (tk:token) ()\n^entry():\nd = qcopy x\naction_call @middle (x) () () (tk)\nquncopy x d\n",
+    );
+    root.imports.push(bennett_circuits::object::Import {
+        name: "leaf".into(),
+        signature: leaf.symbols[0].signature.clone(),
+        pinned_closure_hash: None,
+    });
+    assert_eq!(root.hash().unwrap().proof_status, "pending");
+    assert_eq!(
+        link(&root, std::slice::from_ref(&leaf))
+            .unwrap()
+            .object
+            .check()
+            .unwrap()
+            .proof_status,
+        "proved"
+    );
+    let bad = object("perm_action @leaf (x:wire mut) () () (unused:token) ()\n^entry():\nx x\n");
+    assert!(link(&root, &[bad]).unwrap_err().0.contains("§6.2"));
+}
+#[test]
+fn read_only_call_phases_cancel_without_erasing_dependency_windows() {
+    let source = "action @phase () (d:wire in) () (unused:token) ()\n^entry():\ns d\naction @a () () () (tk:token) ()\n^entry():\nd = qalloc any 1\nh d\naction_call @phase () (d) () (tk)\nadj action_call @phase () (d) () (tk)\nh d\nqfree d\n";
+    object(source).hash().unwrap();
+    assert!(
+        object(&source.replace("adj action_call @phase () (d) () (tk)\n", ""))
+            .hash()
+            .unwrap_err()
+            .0
+            .contains("§6.2")
+    );
+}
+#[test]
+fn symbolic_inverse_calls_do_not_erase_outstanding_quantum_readers() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @mix (q:wire mut) () () (tk:token) ()\n^entry():\nc = qalloc any 1\nf = qalloc any 4\noracle_call @o tk (q) c f () ()\noracle_call @o tk (q) c f () ()\nqfree c\nqfree f\nh q\naction @a (x:wire mut) () () (tk:token) ()\n^entry():\nd = qalloc any 1\naction_call @mix (d) () () (tk)\n";
+    let tail = "adj action_call @mix (d) () () (tk)\nqfree d\n";
+    let invalid = object(&format!("{prefix}cx d x\n{tail}"));
+    // One exact counterexample refutes the former universal cleanup claim.
+    let ir = bennett_circuits::lower::lower_program_with_args(
+        &invalid,
+        "a",
+        &[bennett_circuits::oracle::Argument::Token(
+            bennett_circuits::oracle::Budget {
+                steps: 1,
+                heap: 0,
+                stack: 0,
+                depth: 0,
+            },
+        )],
+    )
+    .unwrap();
+    let flat = bennett_circuits::flatten::flatten(&ir).unwrap();
+    let failure =
+        std::panic::catch_unwind(|| bennett_circuits::simulation::basis(&flat, "0")).unwrap_err();
+    let message = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failure.downcast_ref::<&str>().copied())
+        .unwrap();
+    assert!(message.contains("workspace"), "{message}");
+    assert!(invalid.hash().unwrap_err().0.contains("§6.2"));
+    object(&format!("{prefix}cx d x\ncx d x\n{tail}"))
+        .hash()
+        .unwrap();
+    let with_phase = format!("{prefix}s d\n{tail}");
+    assert!(object(&with_phase).hash().is_err());
+}
+#[test]
+fn live_token_identity_bodies_discharge_cross_call_cleanup_universally() {
+    let source = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\nperm_action @identity (x:wire mut) () () (tk:token) ()\n^entry():\nc = qalloc any 1\nf = qalloc any 4\noracle_call @o tk (x) c f () ()\noracle_call @o tk (x) c f () ()\nqfree c\nqfree f\naction @a (x:wire mut) () () (tk:token) ()\n^entry():\nd = qcopy x\naction_call @identity (x) () () (tk)\nquncopy x d\n";
+    object(source).hash().unwrap();
+    assert!(
+        object(&source.replacen("oracle_call @o tk (x) c f () ()\n", "", 1))
+            .hash()
+            .unwrap_err()
+            .0
+            .contains("§6.2")
+    );
+}
+#[test]
+fn imported_local_region_images_stay_pending_until_data_linking() {
+    let signature = Value::parse(r#"{"abi":"0.8","kind":"data","size":1,"tier":"-"}"#).unwrap();
+    let mut root = object(
+        "action @a (y:wire[4] mut) (addr:wire in) () () ()\n^entry():\nqregion r 1 4 @image\nd = qload r addr\nqxor d y\nqunload r addr d\n",
+    );
+    root.imports.push(bennett_circuits::object::Import {
+        name: "image".into(),
+        signature: signature.clone(),
+        pinned_closure_hash: None,
+    });
+    assert_eq!(root.hash().unwrap().proof_status, "pending");
+    let mut leaf = object("");
+    leaf = Object::parse(&format!("{}\nsection data\nimage 5a\n", leaf.text())).unwrap();
+    leaf.symbols.push(Symbol {
+        index: "0".into(),
+        name: "image".into(),
+        kind: "data".into(),
+        signature,
+        stored_interface_hash: "0".repeat(64),
+    });
+    let linked = link(&root, &[leaf]).unwrap();
+    assert_eq!(linked.object.check().unwrap().proof_status, "proved");
+    let circuit = bennett_circuits::lower::lower_program(&linked.object, "a").unwrap();
+    let flat = bennett_circuits::flatten::flatten(&circuit).unwrap();
+    // 0x5a gives nibble cells 0xa and 0x5, wire zero first.
+    for (input, expected) in [("00000", "01010"), ("00001", "10101")] {
+        let state = bennett_circuits::simulation::basis(&flat, input);
+        assert_eq!(
+            state.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![expected]
+        );
+    }
+
+    // Keep the quantum operand widths valid and change only the declared
+    // imported byte count, isolating the image-size precondition.
+    let mut wrong = root.clone();
+    let Value::Object(signature) = &mut wrong.imports[0].signature else {
+        panic!()
+    };
+    signature.insert("size".into(), Value::Int("2".into()));
+    assert!(wrong.hash().unwrap_err().0.contains("image size"));
 }

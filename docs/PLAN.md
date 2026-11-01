@@ -30,7 +30,7 @@ One Rust crate, std only. Pipeline:
            ──▶ lower  (Q actions now; oracle specialisation in M2)
            ──▶ ir     (hierarchical circuit IR)
            ──▶ flatten/placement (wire allocation; later classes/schemes)
-           ──▶ export (OpenQASM 3 now; QIR, Quil later)
+           ──▶ export (OpenQASM 3, QIR and Quil)
            ──▶ cert   (§12 certificate generation; M4)
 ```
 
@@ -151,8 +151,11 @@ allocation structure). Auxiliary operands make callee workspace explicit.
 The canonical IR parser checks executable text against metadata; a separate
 executable parser ignores the IR comments and simulates actual gate statements.
 A zero-wire identity uses one inert sentinel qubit to satisfy QASM's gate
-operand grammar. QIR and Quil (milestone 5) lower from the same IR;
-neither is an import format here.
+operand grammar. QIR and Quil lower from the same IR through validated flattening. Both retain
+lossless source metadata and an independent executable parser for round-trip
+verification; neither is a general import format here. QIR uses the unrestricted
+QIR 1 runtime-array/controlled-tuple ABI, preserving exact binary64 angles. Quil
+uses standard gates and CONTROLLED/DAGGER modifiers. See docs/EXPORTERS.md.
 
 ## Milestones
 
@@ -325,3 +328,44 @@ replay and structural-only non-permutation output remain required under
 finite test agreement. Numerical/channel claims, supplied schedules,
 generated-ordinal cleanup/recompute and realised-context composition still
 refuse with **b-isa-spec-8r4**; yz8 stays open. Complete M4 before M5 QIR/Quil.
+
+
+## M5 exporter implementation and M4 follow-up
+
+The initial gate failure on re-imported fixtures is tracked by p8s. Harnesses
+now bind tokens explicitly and execute all 18 fixture actions; the complete
+supplemental differential has 24 actions / 940 exhaustive tuples. QIR/Quil
+CLI refusals are replaced by checked action/oracle export with the same
+arguments/budgets as QASM. Each executable parser reads instructions without
+using the source IR comments. LLVM 18 and 23 assembly/verification passed;
+no external Quil parser, QVM or QIR simulator is installed. Executable mutation,
+all base gates, arbitrary controls, negative polarity, adjoints, subnormal
+angles, memory, workspace and bounded oracles are maintained tests.
+
+M4 follow-up adds indexed symbolic histories and literal while-loop flags,
+quantum copies spanning token-dependent calls, exact angle adjoints, lexical
+local images, validated transitive dead-argument elimination and universal
+identity-body refinements, cancellation-aware outstanding readers/phases, dirty
+return checks, nested borrowed lifetime positions and
+same-closure proof-DAG composition. Retained oracle histories keep their typed
+frame provenance. The generated producer pipeline is a string. Draft
+certificate check/hash against the current reference rejects at the explicit
+version or old frame-schema boundary (missing interface); source table rows
+still replay. A schema rejection is not a passed certificate replay.
+
+M4 remains open wherever 9xp.3 or a contract decision still owns work. In
+particular 9su asks how structural-only action packets encode verification
+and reference_program_hash; scheduled/numerical/channel/context-ordinal paths
+retain their actual ISA/library dependencies. No decision bead is closed from
+finite differential agreement. No new structure-recovery optimisation is
+claimed by these exporters.
+
+
+The inverse-call audit found and fixed a real cleanup-checking defect (5mn):
+H on fresh scratch, a CX transferring its value to an interface, and the
+inverse H call were incorrectly reported clean by the call-history path. An
+exact state execution now independently demonstrates the dirty scratch in the
+negative regression. The inverse matches only after its external readers and
+phases have been cancelled. Source declarations and reference fixtures were
+preserved. The test profile enables level-1 optimisation with assertions and
+overflow checks retained; the full gate keeps every original test/domain.

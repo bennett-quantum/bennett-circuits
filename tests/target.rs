@@ -1,6 +1,9 @@
 #[path = "support/exact.rs"]
 #[allow(dead_code)]
 mod exact;
+#[path = "support/fixtures.rs"]
+#[allow(dead_code)]
+mod fixtures;
 #[path = "support/sim.rs"]
 mod sim;
 #[path = "support/target.rs"]
@@ -70,8 +73,8 @@ fn target_placement_matches_unplaced_fixture_states() {
         let path=e.unwrap().path(); if path.extension().is_none_or(|s|s!="bisa") {continue}
         let o=Object::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
         for f in o.functions.iter().filter(|f|f.is_action()) {
-            let p=place_on_target(&o,&f.name,&[],&t).unwrap();
-            let old=bennett_circuits::flatten::flatten(&bennett_circuits::lower::lower_program(&o,&f.name).unwrap()).unwrap();
+            let bindings=fixtures::arguments(f);let p=place_on_target(&o,&f.name,&bindings,&t).unwrap();
+            let old=bennett_circuits::flatten::flatten(&bennett_circuits::lower::lower_program_with_args(&o,&f.name,&bindings).unwrap()).unwrap();
             for x in 0..1usize<<old.interface.len() {
                 let bits=(0..old.interface.len()).map(|i|if x>>i&1==0{'0'}else{'1'}).collect::<String>();
                 assert_eq!(sim::basis(&old,&bits),sim::basis(&p.flat,&bits),"{} {bits}",f.name);count+=1;
@@ -83,7 +86,7 @@ fn target_placement_matches_unplaced_fixture_states() {
             assert_eq!(p.flat,parsed);
         }
     }
-    assert_eq!(count, 740);
+    assert_eq!(count, 750);
     eprintln!("TARGET PLACEMENT: {count} exact placed/unplaced tuples agree");
 }
 

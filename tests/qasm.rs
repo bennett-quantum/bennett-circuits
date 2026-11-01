@@ -1,4 +1,7 @@
-use bennett_circuits::{lower::lower_program, object::Object, qasm};
+#[path = "support/fixtures.rs"]
+#[allow(dead_code)]
+mod fixtures;
+use bennett_circuits::{object::Object, qasm};
 
 #[test]
 fn fixture_roundtrips_and_executable_text_agrees() {
@@ -12,7 +15,12 @@ fn fixture_roundtrips_and_executable_text_agrees() {
         }
         let obj = Object::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
         for f in obj.functions.iter().filter(|f| f.is_action()) {
-            let ir = lower_program(&obj, &f.name).unwrap();
+            let ir = bennett_circuits::lower::lower_program_with_args(
+                &obj,
+                &f.name,
+                &fixtures::arguments(f),
+            )
+            .unwrap();
             let text = qasm::export(&ir).unwrap();
             assert_eq!(qasm::parse(&text).unwrap(), ir);
             assert_eq!(
@@ -25,7 +33,7 @@ fn fixture_roundtrips_and_executable_text_agrees() {
             actions += 1;
         }
     }
-    assert_eq!(actions, 13);
+    assert_eq!(actions, 18);
 }
 
 #[test]
