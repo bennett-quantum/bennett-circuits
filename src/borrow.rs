@@ -3,8 +3,8 @@
 //! entries on its non-borrowed wires. No sampled claim is promoted to proof.
 use crate::{
     Error, Result, bail,
-    flatten::{Flat, FlatGate},
-    ir::{BaseGate, Circuit, WsKind},
+    flatten::{Flat, FlatGate, flatten_allocations},
+    ir::{BaseGate, Circuit, Program, WsKind},
     json::Value,
     object::{Function, Object},
 };
@@ -30,7 +30,7 @@ fn full_word(v: &Value, name: &str, width: u32) -> bool {
         && number("lo") == Some("0")
         && number("hi") == Some(crate::metadata::max_word(width).as_str())
 }
-fn domain(v: &Value, c: &Circuit) -> Result<()> {
+fn domain(v: &Value, c: &Circuit, borrowed_widths: &[u32]) -> Result<()> {
     let bundles = array(get(v, "bundles")?)?;
     let words = c
         .mut_bundles
@@ -49,16 +49,13 @@ fn domain(v: &Value, c: &Circuit) -> Result<()> {
         return Err(error("bundle domain is not the full interface D"));
     }
     let borrowed = array(get(v, "borrowed")?)?;
-    let bs = c
-        .workspace
-        .iter()
-        .filter(|w| w.kind == WsKind::Borrowed)
-        .collect::<Vec<_>>();
     // §12.2 K70: borrowed names are labels; positions bind lifetimes.
-    if borrowed.len() != bs.len()
-        || borrowed.iter().zip(&bs).any(|(v, w)| {
+    // Include nested and adjoint-call lifetimes in the same allocation order
+    // used by certificate::Space, even when this frame borrows locally too.
+    if borrowed.len() != borrowed_widths.len()
+        || borrowed.iter().zip(borrowed_widths).any(|(v, width)| {
             let label = v.get("name").and_then(Value::as_str).unwrap_or("");
-            label.is_empty() || !full_word(v, label, w.width)
+            label.is_empty() || !full_word(v, label, *width)
         })
     {
         return Err(error("borrowed domain is not the full D"));
@@ -136,10 +133,17 @@ fn factor(gates: &[FlatGate], borrowed: &BTreeSet<usize>, width: usize) -> Resul
 pub(crate) fn verify(
     o: &Object,
     f: &Function,
-    c: &Circuit,
+    p: &Program,
     flat: &Flat,
     b: &BTreeSet<usize>,
 ) -> Result<()> {
+    let c = p.top_circuit()?;
+    let (_, _, allocations) = flatten_allocations(p)?;
+    let borrowed_widths = allocations
+        .iter()
+        .filter(|a| a.kind == WsKind::Borrowed)
+        .map(|a| u32::try_from(a.wires.len()).map_err(|_| error("borrow width host limit")))
+        .collect::<Result<Vec<_>>>()?;
     let cert = o
         .certificate
         .as_ref()
@@ -179,18 +183,21 @@ pub(crate) fn verify(
             .ok_or_else(|| error("claim index out of range"))?;
         match get(claim, "kind")?.as_str() {
             Some("exhaustive") => {
-                domain(get(claim, "domain")?, c)?;
+                domain(get(claim, "domain")?, c, &borrowed_widths)?;
                 let expected = get(claim, "expected")?;
                 if expected.get("program").and_then(Value::as_str) != Some(closure)
-                    && !(o.draft_encodings && expected.get("table").is_some())
+                    && !(o.draft_encodings
+                        && (expected.get("table").is_some()
+                            || expected.get("program").and_then(Value::as_str).is_some()))
                 {
                     bail!(
                         "unimplemented: §12 borrow expected-table/external-program replay; decision bennett-circuits-4pf (milestone 2)"
                     );
                 }
-                // The expected program is this exact bound closure. Replaying
-                // its frame is exact X/SWAP evaluation below; factorisation is
-                // proved independently, rather than assumed from this binding.
+                // Object::check/hash replay every draft table/program relation
+                // through certificate::verify after structural validation.
+                // Factorisation is independently proved below; neither a
+                // linked hash nor a claimed table establishes it by itself.
                 accepted = true;
             }
             Some("sampled") => {

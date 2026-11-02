@@ -1368,7 +1368,7 @@ fn symbolic_gate_pairs_and_quantum_phases_span_unrelated_calls() {
 }
 #[test]
 fn translation_witnesses_cover_bundle_flips_and_indexed_controls() {
-    let o=object("perm_action @a (y:wire[2] mut) (x:wire[2] in, p:wire in) () () ()\n^entry():\nb = qborrow any 2\nqpred p\nqxor x b\nqxor b y\nqxor x b\nqxor b y\nqunpred p\nqreturn b\n").materialize().unwrap();
+    let o=object("perm_action @a (y:wire[2] mut) (x:wire[2] in, p:wire in) () () ()\n^entry():\nb = qborrow any 2\nqpred p\nqxor x b\nqxor b y\ncx x[1] b[1]\ncx x[0] b[0]\nqxor b y\nqunpred p\nqreturn b\n").materialize().unwrap();
     let cert =
         bennett_circuits::certificate::generate(&o, "a", &[], None, true, &context(&target()))
             .unwrap();
@@ -1404,6 +1404,37 @@ fn translation_witnesses_cover_bundle_flips_and_indexed_controls() {
     bound.draft_encodings = true;
     bound.certificate = Some(cert);
     bound.check().unwrap();
+    let alternate=object("perm_action @a (y:wire[2] mut) (x:wire[2] in, p:wire in) () () ()\n^entry():\nb = qborrow any 2\nqpred p\nqxor x b\nqxor b y\nqxor x b\nqxor b y\nqunpred p\nqreturn b\n").materialize().unwrap();
+    let alternate_cert = bennett_circuits::certificate::generate(
+        &alternate,
+        "a",
+        &[],
+        None,
+        true,
+        &context(&target()),
+    )
+    .unwrap();
+    let alternate_claims = alternate_cert
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .get("claims")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert!(
+        !alternate_claims
+            .iter()
+            .any(|c| c.get("rule").and_then(Value::as_str) == Some("translation_lemma"))
+    );
+    let mut alternate = alternate;
+    alternate.draft_encodings = true;
+    alternate.certificate = Some(alternate_cert);
+    alternate.check().unwrap();
 }
 #[test]
 fn symbolic_local_regions_are_lexical_and_restore_their_images() {
@@ -1555,4 +1586,95 @@ fn imported_local_region_images_stay_pending_until_data_linking() {
     };
     signature.insert("size".into(), Value::Int("2".into()));
     assert!(wrong.hash().unwrap_err().0.contains("image size"));
+}
+#[test]
+fn source_cannot_forge_internal_history_annotations() {
+    let source = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\n^entry():\nd = qcopy x\nhistory_while x 1\noracle_call @o tk (x) t fr () ()\nquncopy x d\n";
+    assert!(object(source).hash().unwrap_err().0.contains("§4.8"));
+}
+#[test]
+fn symbolic_constant_one_is_distinct_from_a_source_wire_named_one() {
+    let prefix = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (one:wire in) () (tk:token) ()\n^entry():\nd = qalloc any 1\nqxor one d\n";
+    let tail = "oracle_call @o tk (one) t fr () ()\nqfree d\n";
+    let invalid = object(&format!("{prefix}x d\n{tail}"));
+    assert!(invalid.hash().unwrap_err().0.contains("§6.2"));
+    object(&format!("{prefix}qxor one d\n{tail}"))
+        .hash()
+        .unwrap();
+}
+
+#[test]
+fn borrow_relations_resolve_other_linked_programs_and_replay_their_full_domain() {
+    // Commuting bundle flips restore B, but are not the exact reverse V
+    // required by T1. This frame therefore needs the separate full-D T3 claim.
+    let source = "perm_action @a (y:wire[2] mut) (x:wire[2] in) () () ()\n^entry():\nb = qborrow any 2\nqxor x b\nqxor b y\nqxor x b\nqxor b y\nqreturn b\nperm_action @expected (y:wire[2] mut) (x:wire[2] in) () () ()\n^entry():\nb = qborrow any 2\nqreturn b\nqxor x y\n";
+    let mut o = object(source).materialize().unwrap();
+    o.draft_encodings = true;
+    o.certificate = Some(
+        bennett_circuits::certificate::generate(&o, "a", &[], None, true, &context(&target()))
+            .unwrap(),
+    );
+    let expected = o.hash().unwrap().symbols["expected"]
+        .closure_hash
+        .clone()
+        .unwrap();
+    let cert = bennett_circuits::certificate::generate_program(
+        &o,
+        "a",
+        &[],
+        None,
+        true,
+        &context(&target()),
+        &expected,
+    )
+    .unwrap();
+    o.draft_encodings = true;
+    o.certificate = Some(cert.clone());
+    o.check().unwrap();
+
+    // A linked hash alone is no proof: a different relation must be rejected.
+    let mut bad = object(&source.replace("qxor x y\n", "x y[0]\n"))
+        .materialize()
+        .unwrap();
+    bad.draft_encodings = true;
+    bad.certificate = Some(
+        bennett_circuits::certificate::generate(&bad, "a", &[], None, true, &context(&target()))
+            .unwrap(),
+    );
+    let different = bad.hash().unwrap().symbols["expected"]
+        .closure_hash
+        .clone()
+        .unwrap();
+    let wrong = bennett_circuits::certificate::generate_program(
+        &bad,
+        "a",
+        &[],
+        None,
+        true,
+        &context(&target()),
+        &different,
+    );
+    assert!(wrong.unwrap_err().0.contains("tuple mismatch"));
+    let mut unresolved = o;
+    unresolved.certificate =
+        Some(Value::parse(&cert.to_jcs().replace(&expected, &"0".repeat(64))).unwrap());
+    assert!(
+        unresolved
+            .check()
+            .unwrap_err()
+            .0
+            .contains("expected closure unresolved")
+    );
+}
+
+#[test]
+fn borrow_frame_domains_include_nested_lifetimes_even_with_local_borrow() {
+    let o=object("perm_action @helper () () () () ()\n^entry():\nb = qborrow any 1\nqreturn b\nperm_action @a (y:wire[2] mut) (x:wire[2] in) () () ()\n^entry():\nb = qborrow any 2\nqxor x b\nqxor b y\nqxor x b\nqxor b y\nqreturn b\naction_call @helper () () () ()\n").materialize().unwrap();
+    let cert =
+        bennett_circuits::certificate::generate(&o, "a", &[], None, true, &context(&target()))
+            .unwrap();
+    let mut bound = o;
+    bound.draft_encodings = true;
+    bound.certificate = Some(cert);
+    bound.check().unwrap();
 }

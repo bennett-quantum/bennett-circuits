@@ -1003,7 +1003,7 @@ fn abstract_action(o: &Object, f: &Function, p: &Program) -> Result<()> {
         }
         start += w.width as usize;
     }
-    borrow_frames(o, f, top, &flat, &borrowed)?;
+    borrow_frames(o, f, p, &flat, &borrowed)?;
     let reduced = cancel_adjoints(&flat.gates);
     let (_, _, closed) = action_values(
         flat.num_qubits,
@@ -1218,7 +1218,7 @@ fn action_values(
 fn borrow_frames(
     o: &Object,
     f: &Function,
-    top: &Circuit,
+    p: &Program,
     flat: &Flat,
     b: &BTreeSet<usize>,
 ) -> Result<()> {
@@ -1229,7 +1229,7 @@ fn borrow_frames(
     if o.certificate.is_none() {
         return lemma;
     }
-    crate::borrow::verify(o, f, top, flat, b)
+    crate::borrow::verify(o, f, p, flat, b)
 }
 fn translation_frame(flat: &Flat, b: &BTreeSet<usize>) -> Result<()> {
     if b.is_empty() {
@@ -1332,28 +1332,19 @@ pub(crate) fn translation_component(gates: &[FlatGate], b: &BTreeSet<usize>) -> 
         let w = &frame[vlen..vlen + wlen];
         let inv = &frame[vlen + wlen..2 * vlen + wlen];
         let w2 = &frame[2 * vlen + wlen..];
-        // V flips B under controls in immutable X, so its flips commute.
-        // W's targets are disjoint from all W controls (checked below), so
-        // those flips commute too. Bundle self-adjoints may retain bit order.
-        let same_flips = |left: &[FlatGate], right: &[FlatGate]| {
-            let mut remaining = right.iter().collect::<Vec<_>>();
-            for gate in left {
-                let mut controls = gate.controls.clone();
-                controls.sort();
-                let Some(index) = remaining.iter().position(|other| {
-                    let mut other_controls = other.controls.clone();
-                    other_controls.sort();
-                    gate.gate == other.gate
-                        && gate.targets == other.targets
-                        && controls == other_controls
-                }) else {
-                    return false;
-                };
-                remaining.remove(index);
-            }
-            remaining.is_empty()
+        // §5.6(iv) requires the exact reverse sequence, not merely a
+        // commuting or Boolean-equivalent realisation. Within one gate the
+        // effective controls are a set, independent of source operand order.
+        let same_gate = |a: &FlatGate, b: &FlatGate| {
+            let mut ac = a.controls.clone();
+            ac.sort();
+            let mut bc = b.controls.clone();
+            bc.sort();
+            a.gate == b.gate && a.targets == b.targets && ac == bc
         };
-        if !same_flips(v, inv) || !same_flips(w, w2) {
+        if !v.iter().rev().zip(inv).all(|(a, b)| same_gate(a, b))
+            || !w.iter().zip(w2).all(|(a, b)| same_gate(a, b))
+        {
             continue;
         }
         let controls = w

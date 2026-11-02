@@ -300,11 +300,12 @@ entry accuracy matching itself is implemented/tested with exact rationals.
 
 Two additional literal contract gaps are tracked, not removed from scope:
 **b4k** (`isa-0.9`) asks for the topology/connectivity/routing schema absent
-from §8.3 despite §8.2's topology sentence; **v44** (`isa-0.9`) asks for the
-undefined `eps_decade` integer index function. Both paths refuse naming their
-bead. The accepted default remains all-to-all logical connectivity. QIR/Quil
-stay M5 with explicit exporter refusals; wider/direct-machine diagnostic
-acceptance is M6 (`fgx`), not evidence that the circuit placement is unequal.
+from the pinned 0.8 contract; **v44** tracks adopting the `eps_decade` index
+now defined by published 0.9 K9. Both pinned-version paths still name their
+bead. The accepted default remains all-to-all logical connectivity. At this
+M3 checkpoint QIR/Quil were still explicit M5 refusals; the M5 implementation
+below replaces them. Wider/direct-machine diagnostic acceptance remains M6
+(`fgx`), not evidence that circuit placement is unequal.
 
 ## M4 implementation checkpoint — 2026-10-30
 
@@ -361,7 +362,7 @@ finite differential agreement. No new structure-recovery optimisation is
 claimed by these exporters.
 
 
-The inverse-call audit found and fixed a real cleanup-checking defect (5mn):
+The inverse-call audit found and fixed a cleanup-checking defect (5mn):
 H on fresh scratch, a CX transferring its value to an interface, and the
 inverse H call were incorrectly reported clean by the call-history path. An
 exact state execution now independently demonstrates the dirty scratch in the
@@ -369,3 +370,22 @@ negative regression. The inverse matches only after its external readers and
 phases have been cancelled. Source declarations and reference fixtures were
 preserved. The test profile enables level-1 optimisation with assertions and
 overflow checks retained; the full gate keeps every original test/domain.
+Further negative regressions prevent source instructions from forging internal
+history annotations, distinguish the constant one from a legal wire named
+`one` (7i0), and preserve the exact reverse-order requirement of translation
+proofs. Commuting alternatives can still carry separately verified full-domain
+T3 relations, including linked `expected.program` relations. Borrow proof
+checking independently establishes factorisation and replays the complete
+linked relation, rejecting mismatched or unresolved programs.
+
+Final M5 job verification: `timeout 2400 cargo test --offline -j4 --
+--test-threads=4 --nocapture` passed all 192 tests, with none failed, ignored
+or filtered. The maintained differential reports 24 actions / 940 tuples and
+62 oracle occurrences / 680 tuples agreeing. `cargo fmt --check` and
+`timeout 300 cargo clippy --offline --all-targets -j4 -- -D warnings` passed.
+The gate's `cargo test` body was run directly because `scripts/pre-push` invokes
+Git and this job delegates all Git operations to the runner. Beads 9xp.1,
+7bu, z9r, p8s, 5mn, 7i0 and lv6 are complete. 9xp.2/9xp.3, 4pf/4fa,
+9su and the actual library/target contract owners stay open; exact upstream
+requests and reference schema evidence are in
+`docs/design/2026-11-01-m5-contract-requests.md`.

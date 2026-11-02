@@ -26,6 +26,7 @@ pub fn pending(o: &Object) -> Vec<PendingObligation> {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Term {
+    One,
     Atom(String),
     Apply(String, Vec<Term>),
     Permutation(String, Vec<Term>),
@@ -50,7 +51,7 @@ fn contains(term: &Term, needle: &Term) -> bool {
             | Term::Oracle(_, ts)
             | Term::Bits(ts) => ts.iter().any(|t| contains(t, needle)),
             Term::Xor(ts) => ts.iter().any(|t| contains(t, needle)),
-            Term::Atom(_) => false,
+            Term::Atom(_) | Term::One => false,
         }
 }
 fn bit(value: &Term, i: usize) -> Term {
@@ -386,11 +387,11 @@ fn conjunction(values: Vec<Term>) -> Term {
     }
     let mut values = values
         .into_iter()
-        .filter(|v| *v != Term::Atom("one".into()))
+        .filter(|v| *v != Term::One)
         .collect::<Vec<_>>();
     values.sort();
     if values.is_empty() {
-        Term::Atom("one".into())
+        Term::One
     } else if values.len() == 1 {
         values.pop().unwrap()
     } else {
@@ -400,7 +401,7 @@ fn conjunction(values: Vec<Term>) -> Term {
 fn masked(value: Term, condition: &Term) -> Term {
     if value == zero() || *condition == zero() {
         zero()
-    } else if *condition == Term::Atom("one".into()) {
+    } else if *condition == Term::One {
         value
     } else {
         Term::Oracle("mask".into(), vec![condition.clone(), value])
@@ -521,6 +522,9 @@ fn evaluate_body(o: &Object, f: &Function, evaluation: &mut Evaluation) -> Resul
     declarations(&source, &mut lexical);
     let mut bounds = vec![];
     for instruction in lexical {
+        if instruction.opcode == "history_while" {
+            bail!("history: compiler-only annotation is not an ISA instruction (§4.8)")
+        }
         if instruction.opcode == "qloop" {
             let Some(Operand::Int(n)) = instruction.operands.first() else {
                 bail!("history: literal loop bound (§5.3)")
@@ -620,7 +624,7 @@ fn evaluate_body(o: &Object, f: &Function, evaluation: &mut Evaluation) -> Resul
             cs.push(if *positive {
                 value
             } else {
-                xor(value, Term::Atom("one".into()))
+                xor(value, Term::One)
             });
         }
         let condition = conjunction(cs);
@@ -748,7 +752,7 @@ fn evaluate_body(o: &Object, f: &Function, evaluation: &mut Evaluation) -> Resul
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let key = format!("{op}:{locations:?}:{controls:?}");
-                let (next, restores) = if condition == Term::Atom("one".into()) {
+                let (next, restores) = if condition == Term::One {
                     (vec![prior[1].clone(), prior[0].clone()], false)
                 } else {
                     reversible(&key, &prior, std::slice::from_ref(&condition))

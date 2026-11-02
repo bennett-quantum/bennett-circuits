@@ -72,8 +72,8 @@ angles, zero-wire output, CLI actions/tokens/oracles, stale metadata and direct
 executable mutation. LLVM 18 `llvm-as-18` and `opt-18 -passes=verify` validate the
 all-gates QIR when installed; absence is reported explicitly. The job separately
 assembled and verified the same module with LLVM 23 (`llvm-as-23`, `opt-23`).
-The job also
-checked for Quil/pyQuil, quilc, QVM, pyqir and qirrunner: none was installed.
+The job also checked for Quil/pyQuil, quilc, QVM, pyqir and qirrunner: none
+was installed.
 LLVM validation establishes LLVM well-formedness, not quantum execution.
 
 `tests/differential.rs` discovers all reference fixtures and adds supplemental
