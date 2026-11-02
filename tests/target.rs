@@ -13,7 +13,7 @@ use bennett_circuits::{
     placement::place_on_target,
     target::{Rational, Target},
 };
-const ROOT: &str = "/home/tobias/Projects/bennett-workspace/bennett-isa-spec/conformance/cases/E";
+const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/conformance/cases/E");
 #[test]
 fn published_exact_target_load_and_forbidden_eps_reference() {
     let text = std::fs::read_to_string(format!("{ROOT}/E-epsilon-zero-exact/target.json")).unwrap();
@@ -69,7 +69,7 @@ fn target_placement_matches_unplaced_fixture_states() {
     );
     let t = Target::parse(&value.to_jcs()).unwrap();
     let mut count = 0;
-    for e in std::fs::read_dir("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/tests/fixtures").unwrap() {
+    for e in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/tests/fixtures")).unwrap() {
         let path=e.unwrap().path(); if path.extension().is_none_or(|s|s!="bisa") {continue}
         let o=Object::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
         for f in o.functions.iter().filter(|f|f.is_action()) {
@@ -473,7 +473,7 @@ fn oracle_placement_annotations_bind_budget_and_exact_target_hash() {
         Target::parse(&file).unwrap().hash,
         "71e1973c642abe3ea4ae5b4c7211fd4e2b2b7817894ca958d138c992cc321596"
     );
-    let o=Object::parse(&std::fs::read_to_string("/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa").unwrap()).unwrap();
+    let o=Object::parse(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa")).unwrap()).unwrap();
     let budget = bennett_circuits::oracle::Budget {
         steps: 0,
         heap: 0,

@@ -257,7 +257,7 @@ fn linking_keeps_and_rechecks_library_certificates() {
 #[test]
 fn certificates_replayed_against_reference_cli() {
     use std::process::Command;
-    let binary = "/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref";
+    let binary = concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/m4-reference");
     std::fs::create_dir_all(&dir).unwrap();
     let o = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\n")
@@ -854,7 +854,7 @@ fn every_oracle_certificate_row_replays_with_arbitrary_targets_and_faults() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("source.bisa");
     std::fs::write(&path, o.text()).unwrap();
-    let binary = "/home/tobias/Projects/bennett-workspace/bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref";
+    let binary = concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
     for command in ["check", "hash"] {
         let output = Command::new(binary)
             .arg(command)
