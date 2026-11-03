@@ -1,4 +1,5 @@
-//! ISA 0.9-draft §12.1–§12.3 CLAIM-REPLAY. Full positional tuples and
+//! ISA 0.8 reference program/structural replay and opt-in 0.9 CLAIM-REPLAY.
+//! Full positional tuples and
 //! per-claim invocation bindings require explicit draft opt-in (ratified A3).
 //! Reference relations only: no claim of scheduled/target equivalence.
 use crate::{
@@ -124,6 +125,28 @@ fn resolve_invocation(_o: &Object, f: &Function, v: &V) -> Result<(Vec<Argument>
         .collect::<Result<Vec<_>>>()?;
 
     Ok((args, b))
+}
+fn claim_invocation(o: &Object, f: &Function, claim: &V) -> Result<(Vec<Argument>, Budget)> {
+    if o.draft_encodings {
+        return resolve_invocation(o, f, get(claim, "invocation")?);
+    }
+    // A parameter-free action has one forward reference computation in 0.8.
+    // Other legacy claims need their resolved schedule context; never guess
+    // classical values or an oracle budget to obtain a passing replay.
+    if !f.is_action() || !f.groups[3].is_empty() {
+        bail!(
+            "certificate: resolved invocation context required for parametrised/oracle 0.8 claim (§12.1)"
+        )
+    }
+    Ok((
+        vec![],
+        Budget {
+            steps: 0,
+            heap: 0,
+            stack: 0,
+            depth: 0,
+        },
+    ))
 }
 fn program(o: &Object, f: &Function, args: &[Argument], b: Budget) -> Result<Program> {
     if o.schedule.is_some() {
@@ -972,9 +995,9 @@ fn claim_dag(regions: &BTreeMap<String, V>) -> Result<()> {
     }
     Ok(())
 }
-/// Validate every draft claim, not just the indices referenced by verification.
+/// Validate every claim, not just the indices referenced by verification.
 pub(crate) fn verify(o: &Object) -> Result<()> {
-    if !o.draft_encodings || !o.imports.is_empty() {
+    if !o.imports.is_empty() {
         return Ok(());
     }
     let Some(cert) = &o.certificate else {
@@ -1083,23 +1106,33 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                             "unimplemented: nested qinplace owner @{owner} proof/context replay; bennett-circuits-4pf (§12.3)"
                         )
                     }
-                    let inv = get(claim, "invocation")?;
-                    let (args, b) = resolve_invocation(o, f, inv)?;
-                    let subject = get(claim, "subject")?;
-                    if get(subject, "closure_hash")?.as_str() != Some(hash)
-                        || get(subject, "variant")?.as_str() != Some("forward")
-                        || get(subject, "inherited_controls")?.as_u64() != Some(0)
-                    {
-                        bail!(
-                            "certificate: subject binding unsupported/mismatch; bennett-circuits-4pf (§12.1)"
-                        )
+                    let (args, b) = claim_invocation(o, f, claim)?;
+                    if o.draft_encodings {
+                        let subject = get(claim, "subject")?;
+                        if get(subject, "closure_hash")?.as_str() != Some(hash)
+                            || get(subject, "variant")?.as_str() != Some("forward")
+                            || get(subject, "inherited_controls")?.as_u64() != Some(0)
+                        {
+                            bail!(
+                                "certificate: subject binding unsupported/mismatch; bennett-circuits-4pf (§12.1)"
+                            )
+                        }
+                        if subject.get("schedule_hash").is_some() {
+                            bail!(
+                                "E_SCHEDULE_INFEASIBLE: scheduled claim requires expansion library b-isa-spec-8r4"
+                            )
+                        }
                     }
-                    if subject.get("schedule_hash").is_some() {
-                        bail!(
-                            "E_SCHEDULE_INFEASIBLE: scheduled claim requires expansion library b-isa-spec-8r4"
-                        )
+                    let mut space = Space::new(&program(o, f, &args, b)?, f)?;
+                    if !o.draft_encodings {
+                        // Existing 0.8 borrow claims label their lifetime
+                        // positions with source names. Keep those labels;
+                        // domain equality still checks every position/width.
+                        let borrowed = array(get(get(claim, "domain")?, "borrowed")?)?;
+                        for ((name, _), entry) in space.borrowed.iter_mut().zip(borrowed) {
+                            *name = text(get(entry, "name")?)?.into();
+                        }
                     }
-                    let space = Space::new(&program(o, f, &args, b)?, f)?;
                     if get(claim, "domain")? != &space.domain() {
                         bail!(
                             "certificate: domain must equal full D; subset evidence replay pending bennett-circuits-4pf (§12.2)"
@@ -1107,6 +1140,11 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                     }
                     let expected = get(claim, "expected")?;
                     if let Some(rows) = expected.get("table") {
+                        if !o.draft_encodings {
+                            bail!(
+                                "certificate: positional table replay requires explicit 0.9-draft opt-in (§12.1)"
+                            )
+                        }
                         let rows = array(rows)?;
                         let mut index = 0;
                         space.each(|bits|{let row=rows.get(index).ok_or("certificate: missing table row (§12.1)")?;let actual=obj([("before",space.tuple(bits)),("after",space.tuple(&space.execute(bits)?))]);if row!=&actual {bail!("certificate: full tuple mismatch/noncanonical row at {index} (§12.1)")}index+=1;Ok(())})?;
@@ -1151,7 +1189,12 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                     }
                 }
                 "structural" => {
-                    let invocation = get(claim, "invocation")?;
+                    let universal = obj([("args", strv("all")), ("budget", strv("all"))]);
+                    let invocation = if o.draft_encodings {
+                        get(claim, "invocation")?
+                    } else {
+                        &universal
+                    };
                     if invocation != &obj([("args", strv("all")), ("budget", strv("all"))]) {
                         resolve_invocation(o, f, invocation)?;
                     }
@@ -1213,7 +1256,7 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                     "certificate: verification.oracle does not name a full relation proof (§12.3)"
                 )
             }
-            let (args, b) = resolve_invocation(o, f, get(claim, "invocation")?)?;
+            let (args, b) = claim_invocation(o, f, claim)?;
             let expected_rate = Space::new(&program(o, f, &args, b)?, f)?.fault_rate(f)?;
             if get(verification, "fault_rate")? != &expected_rate {
                 bail!("certificate: computed full-domain fault histogram differs (§12.3)")

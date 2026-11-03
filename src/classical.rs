@@ -185,10 +185,25 @@ impl<'a> Machine<'a> {
                 .get(n)
                 .cloned()
                 .ok_or_else(|| Error(format!("CC: undefined {n} (§7.4)"))),
-            Operand::Int(n) => Ok(V::Int(
-                n.parse().map_err(|_| Error("CC: integer literal".into()))?,
-                self.object.header.ptr_width,
-            )),
+            Operand::Int(n) => {
+                let digits = n.strip_prefix('-').unwrap_or(n);
+                if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                    bail!("CC: integer literal")
+                }
+                // Keep the low 128 bits before the instruction's width mask.
+                // This also handles the signed minimum without i128 overflow.
+                let value = digits.bytes().fold(0u128, |v, digit| {
+                    v.wrapping_mul(10).wrapping_add(u128::from(digit - b'0'))
+                });
+                Ok(V::Int(
+                    if n.starts_with('-') {
+                        value.wrapping_neg()
+                    } else {
+                        value
+                    },
+                    self.object.header.ptr_width,
+                ))
+            }
             _ => bail!("unimplemented: CC operand {o:?} (milestone 2)"),
         }
     }
@@ -366,10 +381,18 @@ impl<'a> Machine<'a> {
                 args.push(self.qid(&self.get(a, &Operand::Name(n.clone()))?)?);
             }
         }
-        if !matches!(&ops[4],Operand::List(ns)if ns.is_empty()) {
-            bail!("unimplemented: CC region classical arguments (milestone 2)")
-        }
-        let mut program = crate::lower::lower_program(self.object, name)?;
+        let Operand::List(actuals) = &ops[4] else {
+            bail!("CC: region classical argument list")
+        };
+        let classical = actuals
+            .iter()
+            .map(|n| {
+                Ok(crate::oracle::Argument::Integer(
+                    self.n(a, &Operand::Name(n.clone()))?.to_string(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut program = crate::lower::lower_program_with_args(self.object, name, &classical)?;
         if adj {
             let i = program
                 .circuits

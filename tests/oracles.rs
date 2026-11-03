@@ -11,7 +11,14 @@ use bennett_circuits::{
 };
 #[test]
 fn literal_inc8_commits_and_reverses_all_workspace() {
-    let o=Object::parse(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa")).unwrap()).unwrap();
+    let o = Object::parse(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
     for steps in [0, 2, 3, 4] {
         let p = specialise(
             &o,
@@ -305,7 +312,14 @@ fn every_oracle_matches_cli_on_basis_tuples() {
 }
 #[test]
 fn allocator_assignment_slots_follow_spec_order() {
-    let o=Object::parse(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/tests/fixtures/heap.bisa")).unwrap()).unwrap();
+    let o = Object::parse(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/heap.bisa"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
     let p = specialise(
         &o,
         "heap",

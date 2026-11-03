@@ -324,6 +324,7 @@ fn place_target_program(
     let mut gate_starts = vec![clock; n];
     let mut gate_ends = vec![clock; n];
     let mut wires = Vec::new();
+    let mut scheme_frames = Vec::new();
     let mut i = 0;
     while i < n {
         let g = &placement.flat.gates[i];
@@ -428,6 +429,7 @@ fn place_target_program(
             });
             clock = end;
         }
+        let first_ancilla = wires.len();
         for (q, class, dirty) in expanded.ancillae {
             wires.push(TimedWire {
                 wire: q,
@@ -437,6 +439,7 @@ fn place_target_program(
                 dirty,
             });
         }
+        scheme_frames.push(first_ancilla..wires.len());
         gate_ends[i] = clock;
         i += 1;
     }
@@ -445,19 +448,28 @@ fn place_target_program(
     let base = placement.flat.num_qubits;
     let mut pool: Vec<(String, bool, Rational, usize)> = Vec::new();
     let mut remap = BTreeMap::new();
-    for w in &mut wires {
-        let slot = if let Some((_, _, end, q)) = pool.iter_mut().find(|(c, d, e, _)| {
-            *c == w.class && *d == w.dirty && e.compare(w.start).is_ok_and(|o| !o.is_gt())
-        }) {
-            *end = w.end;
-            *q
-        } else {
-            let q = base + pool.len();
-            pool.push((w.class.clone(), w.dirty, w.end, q));
-            q
-        };
-        remap.insert(w.wire, slot);
-        w.wire = slot;
+    for frame in scheme_frames {
+        // All ancillae of one expansion coexist, including at zero duration.
+        // Reserve its slots until every ancilla in that invocation is placed.
+        let mut reserved = BTreeSet::new();
+        for w in &mut wires[frame] {
+            let slot = if let Some((_, _, end, q)) = pool.iter_mut().find(|(c, d, e, q)| {
+                *c == w.class
+                    && *d == w.dirty
+                    && !reserved.contains(q)
+                    && e.compare(w.start).is_ok_and(|o| !o.is_gt())
+            }) {
+                *end = w.end;
+                *q
+            } else {
+                let q = base + pool.len();
+                pool.push((w.class.clone(), w.dirty, w.end, q));
+                q
+            };
+            remap.insert(w.wire, slot);
+            w.wire = slot;
+            reserved.insert(slot);
+        }
     }
     for g in &mut flat.gates {
         for q in g

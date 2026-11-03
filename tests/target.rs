@@ -13,7 +13,10 @@ use bennett_circuits::{
     placement::place_on_target,
     target::{Rational, Target},
 };
-const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/conformance/cases/E");
+const ROOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../bennett-isa-spec/conformance/cases/E"
+);
 #[test]
 fn published_exact_target_load_and_forbidden_eps_reference() {
     let text = std::fs::read_to_string(format!("{ROOT}/E-epsilon-zero-exact/target.json")).unwrap();
@@ -69,21 +72,44 @@ fn target_placement_matches_unplaced_fixture_states() {
     );
     let t = Target::parse(&value.to_jcs()).unwrap();
     let mut count = 0;
-    for e in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/tests/fixtures")).unwrap() {
-        let path=e.unwrap().path(); if path.extension().is_none_or(|s|s!="bisa") {continue}
-        let o=Object::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
-        for f in o.functions.iter().filter(|f|f.is_action()) {
-            let bindings=fixtures::arguments(f);let p=place_on_target(&o,&f.name,&bindings,&t).unwrap();
-            let old=bennett_circuits::flatten::flatten(&bennett_circuits::lower::lower_program_with_args(&o,&f.name,&bindings).unwrap()).unwrap();
-            for x in 0..1usize<<old.interface.len() {
-                let bits=(0..old.interface.len()).map(|i|if x>>i&1==0{'0'}else{'1'}).collect::<String>();
-                assert_eq!(sim::basis(&old,&bits),sim::basis(&p.flat,&bits),"{} {bits}",f.name);count+=1;
+    for e in std::fs::read_dir(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../bennett-isa-spec/reference-interpreter/tests/fixtures"
+    ))
+    .unwrap()
+    {
+        let path = e.unwrap().path();
+        if path.extension().is_none_or(|s| s != "bisa") {
+            continue;
+        }
+        let o = Object::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for f in o.functions.iter().filter(|f| f.is_action()) {
+            let bindings = fixtures::arguments(f);
+            let p = place_on_target(&o, &f.name, &bindings, &t).unwrap();
+            let old = bennett_circuits::flatten::flatten(
+                &bennett_circuits::lower::lower_program_with_args(&o, &f.name, &bindings).unwrap(),
+            )
+            .unwrap();
+            for x in 0..1usize << old.interface.len() {
+                let bits = (0..old.interface.len())
+                    .map(|i| if x >> i & 1 == 0 { '0' } else { '1' })
+                    .collect::<String>();
+                assert_eq!(
+                    sim::basis(&old, &bits),
+                    sim::basis(&p.flat, &bits),
+                    "{} {bits}",
+                    f.name
+                );
+                count += 1;
             }
-            assert_eq!(p.resources["gates"], Rational::integer(p.events.len() as i128));
-            assert!(p.classes.iter().all(|c|c=="fast"));
-            let q=bennett_circuits::qasm::export_placed(&p).unwrap();
-            let parsed=bennett_circuits::qasm::parse_flat(&q).unwrap();
-            assert_eq!(p.flat,parsed);
+            assert_eq!(
+                p.resources["gates"],
+                Rational::integer(p.events.len() as i128)
+            );
+            assert!(p.classes.iter().all(|c| c == "fast"));
+            let q = bennett_circuits::qasm::export_placed(&p).unwrap();
+            let parsed = bennett_circuits::qasm::parse_flat(&q).unwrap();
+            assert_eq!(p.flat, parsed);
         }
     }
     assert_eq!(count, 750);
@@ -140,6 +166,57 @@ fn scheme_target() -> bennett_circuits::json::Value {
         ),
     );
     t
+}
+#[test]
+fn zero_time_scheme_must_keep_distinct_ancillae() {
+    use bennett_circuits::{proof::basis, qasm};
+    let mut value = scheme_target();
+    put(
+        &mut value,
+        "schemes",
+        val(
+            r#"[{"name":"two_clean","realises":{"op":"x","controls":{"min":1,"max":1}},"ancillae":{"count":2,"class":"fast","state":"clean"},"template":[{"gate":"cx","wires":["c[0]","a[0]"]},{"gate":"cx","wires":["c[0]","a[1]"]},{"gate":"cx","wires":["a[0]","t"]},{"gate":"cx","wires":["c[0]","a[1]"]},{"gate":"cx","wires":["c[0]","a[0]"]}]}]"#,
+        ),
+    );
+    for count in [1, 2] {
+        let calls = "ctl p action_call @sub (t) () () ()\n".repeat(count);
+        let o = make_object(&format!(
+            "perm_action @sub (t:wire mut) () () () ()\n^entry():\nx t\nperm_action @a (t:wire mut) (p:wire in) () () ()\n^entry():\n{calls}"
+        ));
+        for time in [1, 0] {
+            let mut target = value.clone();
+            let bennett_circuits::json::Value::Object(fields) = &mut target else {
+                panic!()
+            };
+            let bennett_circuits::json::Value::Array(gates) = fields.get_mut("gates").unwrap()
+            else {
+                panic!()
+            };
+            for gate in gates {
+                put(
+                    gate,
+                    "cost",
+                    val(&format!(r#"{{"time":{time},"gates":1}}"#)),
+                );
+            }
+            let placed =
+                place_on_target(&o, "a", &[], &Target::parse(&target.to_jcs()).unwrap()).unwrap();
+            let executable = qasm::parse_flat(&qasm::export_placed(&placed).unwrap()).unwrap();
+            for t in [false, true] {
+                for p in [false, true] {
+                    let expected = vec![t ^ (p && count == 1), p];
+                    assert_eq!(
+                        basis(&placed.flat, &[t, p]).unwrap(),
+                        expected,
+                        "time={time}, calls={count}"
+                    );
+                    assert_eq!(basis(&executable, &[t, p]).unwrap(), expected);
+                }
+            }
+            // Simultaneous ancillae stay distinct; later invocations reuse them.
+            assert_eq!(placed.flat.num_qubits, 4);
+        }
+    }
 }
 #[test]
 fn scheme_expansion_is_exact_accounts_leaves_and_reuses_ancilla_frames() {
@@ -473,7 +550,14 @@ fn oracle_placement_annotations_bind_budget_and_exact_target_hash() {
         Target::parse(&file).unwrap().hash,
         "71e1973c642abe3ea4ae5b4c7211fd4e2b2b7817894ca958d138c992cc321596"
     );
-    let o=Object::parse(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa")).unwrap()).unwrap();
+    let o = Object::parse(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
     let budget = bennett_circuits::oracle::Budget {
         steps: 0,
         heap: 0,

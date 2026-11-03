@@ -11,7 +11,14 @@ use bennett_circuits::{
 };
 #[test]
 fn qinplace_all_basis_and_adjoint() {
-    let o=Object::parse(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/conformance/cases/objects/qinplace.bisa")).unwrap()).unwrap();
+    let o = Object::parse(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bennett-isa-spec/conformance/cases/objects/qinplace.bisa"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
     let p = lower_program_with_args(
         &o,
         "inc_inplace",
@@ -122,7 +129,19 @@ fn integer_specialisation_arguments_are_range_checked() {
 }
 #[test]
 fn cli_exports_a_budget_specialised_oracle() {
-    let output=std::process::Command::new(env!("CARGO_BIN_EXE_bennett-circuits")).args(["export-qasm",concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"),"inc8","--budget","0,0,0,0"]).output().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_bennett-circuits"))
+        .args([
+            "export-qasm",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"
+            ),
+            "inc8",
+            "--budget",
+            "0,0,0,0",
+        ])
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -135,7 +154,11 @@ fn cli_exports_a_budget_specialised_oracle() {
 }
 #[test]
 fn qinplace_requires_fault_free_inverse_pair_under_the_actual_token() {
-    let text=std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/conformance/cases/objects/qinplace.bisa")).unwrap();
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../bennett-isa-spec/conformance/cases/objects/qinplace.bisa"
+    ))
+    .unwrap();
     for (text, steps) in [
         (text.clone(), 0),
         (
@@ -161,7 +184,10 @@ fn qinplace_requires_fault_free_inverse_pair_under_the_actual_token() {
 #[test]
 fn compiled_basis_cli_serves_suite_f_execution_cases() {
     use bennett_circuits::json::Value;
-    let base = concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/conformance/cases/objects");
+    let base = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../bennett-isa-spec/conformance/cases/objects"
+    );
     for (args, field, value) in [
         (
             vec![
@@ -245,7 +271,14 @@ fn pointer_specialisation_rejects_invalid_or_out_of_range_values() {
 
 #[test]
 fn basis_diagnostics_do_not_materialise_halt_padding_for_large_budgets() {
-    let o=Object::parse(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa")).unwrap()).unwrap();
+    let o = Object::parse(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
     let (payload, code, steps) = bennett_circuits::proof::oracle_basis(
         &o,
         "inc8",

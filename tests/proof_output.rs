@@ -19,6 +19,102 @@ fn object(body: &str) -> Object {
         .collect();
     o
 }
+fn legacy_program_certificate(o: &Object, expected: &str) -> Value {
+    let ids = o.hash().unwrap().symbols;
+    let h = ids["a"].closure_hash.as_ref().unwrap();
+    let ih = &ids["a"].interface_hash;
+    let expected = ids[expected].closure_hash.as_ref().unwrap();
+    Value::parse(&format!(r#"{{"versions":{{"cert":"0.8"}},"bindings":{{"object_hash":"{}","interface_hash":"{ih}","closure_hash":"{h}"}},"producer":{{"name":"test","version":"1","materialisation":{{"llvm_version":"none","pipeline":[],"normaliser_version":"1"}}}},"regions":{{"{h}":{{"claims":[{{"kind":"exhaustive","domain":{{"bundles":[{{"name":"x","width":1,"lo":"0","hi":"1"}}],"borrowed":[],"regions":[]}},"expected":{{"program":"{expected}"}}}}],"verification":{{"unitary":[0]}}}}}},"composition":{{"method":"sum_over_multiplicities","multiplicities":{{}},"epsilon_total":{{"diamond":0}}}}}}"#, o.object_hash())).unwrap()
+}
+#[test]
+fn legacy_certificate_must_replay_false_program() {
+    let mut o = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\nperm_action @identity (x:wire mut) () () () ()\n^entry():\nx x\nx x\n").materialize().unwrap();
+    o.certificate = Some(legacy_program_certificate(&o, "identity"));
+    let o = o.materialize().unwrap();
+    for result in [o.check(), o.hash()] {
+        assert!(result.unwrap_err().0.contains("tuple mismatch"));
+    }
+}
+#[test]
+fn legacy_certificate_replays_valid_programs_and_checks_bindings() {
+    let mut o = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\nperm_action @same (x:wire mut) () () () ()\n^entry():\nx x\nx x\nx x\n").materialize().unwrap();
+    let cert = legacy_program_certificate(&o, "same");
+    o.certificate = Some(cert.clone());
+    o.check().unwrap();
+    o.hash().unwrap();
+    for field in ["object_hash", "interface_hash", "closure_hash"] {
+        let mut wrong = cert.clone();
+        let Value::Object(top) = &mut wrong else {
+            panic!()
+        };
+        let Value::Object(bindings) = top.get_mut("bindings").unwrap() else {
+            panic!()
+        };
+        bindings.insert(field.into(), Value::Str("0".repeat(64)));
+        o.certificate = Some(wrong);
+        assert!(o.check().is_err(), "{field} binding was ignored");
+        assert!(o.hash().is_err(), "{field} binding was ignored");
+    }
+}
+#[test]
+fn legacy_certificate_checks_unreferenced_claims_and_structural_witnesses() {
+    let mut o = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\nperm_action @same (x:wire mut) () () () ()\n^entry():\nx x\nx x\nx x\nperm_action @identity (x:wire mut) () () () ()\n^entry():\nx x\nx x\n").materialize().unwrap();
+    let valid = legacy_program_certificate(&o, "same");
+    let false_claim = legacy_program_certificate(&o, "identity")
+        .get("regions")
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()
+        .get("claims")
+        .unwrap()
+        .as_array()
+        .unwrap()[0]
+        .clone();
+    let mut extra = valid.clone();
+    let Value::Object(top) = &mut extra else {
+        panic!()
+    };
+    let Value::Object(regions) = top.get_mut("regions").unwrap() else {
+        panic!()
+    };
+    let Value::Object(region) = regions.values_mut().next().unwrap() else {
+        panic!()
+    };
+    let Value::Array(claims) = region.get_mut("claims").unwrap() else {
+        panic!()
+    };
+    claims.push(false_claim);
+    // verification.unitary still references only claim 0, which is true.
+    o.certificate = Some(extra);
+    assert!(o.check().unwrap_err().0.contains("tuple mismatch"));
+
+    for witness in ["{}", "{\"extra\":0}"] {
+        let mut cert = valid.clone();
+        let Value::Object(top) = &mut cert else {
+            panic!()
+        };
+        let Value::Object(regions) = top.get_mut("regions").unwrap() else {
+            panic!()
+        };
+        let Value::Object(region) = regions.values_mut().next().unwrap() else {
+            panic!()
+        };
+        region.insert("claims".into(), Value::parse(&format!(r#"[{{"kind":"structural","rule":"adjoint_table","subclaims":[],"witness":{witness}}}]"#)).unwrap());
+        o.certificate = Some(cert);
+        if witness == "{}" {
+            o.check().unwrap();
+        } else {
+            let error = o.check().unwrap_err();
+            assert!(
+                error.0.contains("§9.1") && error.0.contains("unknown"),
+                "{error}"
+            );
+        }
+    }
+}
 #[path = "support/target.rs"]
 mod targets;
 fn target() -> bennett_circuits::target::Target {
@@ -257,7 +353,10 @@ fn linking_keeps_and_rechecks_library_certificates() {
 #[test]
 fn certificates_replayed_against_reference_cli() {
     use std::process::Command;
-    let binary = concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
+    let binary = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"
+    );
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/m4-reference");
     std::fs::create_dir_all(&dir).unwrap();
     let o = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\n")
@@ -854,7 +953,10 @@ fn every_oracle_certificate_row_replays_with_arbitrary_targets_and_faults() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("source.bisa");
     std::fs::write(&path, o.text()).unwrap();
-    let binary = concat!(env!("CARGO_MANIFEST_DIR"), "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
+    let binary = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"
+    );
     for command in ["check", "hash"] {
         let output = Command::new(binary)
             .arg(command)
