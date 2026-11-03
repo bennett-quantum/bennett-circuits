@@ -1,9 +1,13 @@
+#[path = "support/corpus.rs"]
+mod corpus;
 use bennett_circuits::{json::Value, object::Object};
 use std::{path::Path, process::Command};
 #[test]
 fn suite_f_check_verdicts_and_rules() {
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let dir = workspace.join("bennett-isa-spec/conformance/cases/F");
+    let implemented = corpus::implemented_isa();
+    let mut tally = corpus::Tally::new("F (static check)");
     let mut count = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path().join("case.json");
@@ -20,8 +24,37 @@ fn suite_f_check_verdicts_and_rules() {
             .join(c.get("object").unwrap().as_str().unwrap());
         let text = std::fs::read_to_string(&obj).unwrap();
         let ours = Object::parse(&text).and_then(|o| o.check());
+        let declared = corpus::declared(&c, Some(&text), &implemented);
+        tally.record(c.get("id").unwrap().as_str().unwrap(), &declared);
+        let reference = Command::new(
+            workspace.join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"),
+        )
+        .args(["check", obj.to_str().unwrap()])
+        .output()
+        .unwrap();
         let expected = c.get("expect").unwrap();
         let ok = expected.get("exit").unwrap().as_u64() == Some(0);
+        if let corpus::Declared::Foreign(v) = &declared {
+            // The published expectation is for the declared version's contract and is not
+            // asserted; the 0.8 obligation is refusal at load. Where the published verdict is
+            // itself a rejection, the reference must still agree with ours (F-version).
+            let err = ours.as_ref().err().map(|e| e.0.clone());
+            corpus::assert_refused(
+                &path.display().to_string(),
+                v,
+                Some(if err.is_some() { 1 } else { 0 }),
+                "",
+                err.as_deref().unwrap_or(""),
+            );
+            if !ok {
+                assert!(
+                    !reference.status.success(),
+                    "{}: published rejection, reference accepted",
+                    path.display()
+                );
+            }
+            continue;
+        }
         assert_eq!(ours.is_ok(), ok, "{}: {ours:?}", path.display());
         if !ok {
             for rule in expected.get("stderr_contains").unwrap().as_array().unwrap() {
@@ -35,16 +68,15 @@ fn suite_f_check_verdicts_and_rules() {
                 );
             }
         }
-        let output = Command::new(
-            workspace.join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"),
-        )
-        .args(["check", obj.to_str().unwrap()])
-        .output()
-        .unwrap();
-        assert_eq!(output.status.success(), ours.is_ok());
+        assert_eq!(reference.status.success(), ours.is_ok());
         count += 1;
     }
     eprintln!("STATIC HARNESS: {count} suite F check verdicts compared");
+    assert_eq!(
+        tally.finish().0,
+        count,
+        "every compared verdict declares the implemented isa"
+    );
 }
 #[test]
 fn semantic_rejections_precede_stored_hashes() {
