@@ -3,6 +3,8 @@
 //! interface/closure hashes, on every spec example (§16.3) and every
 //! fixture. The reference binary is used through its CLI only.
 
+#[path = "support/sibling.rs"]
+mod sibling;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,15 +12,8 @@ use std::process::Command;
 use bennett_circuits::json::Value;
 use bennett_circuits::object::Object;
 
-fn workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("workspace parent")
-        .to_path_buf()
-}
-
 fn ref_bin() -> PathBuf {
-    let p = workspace().join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
+    let p = sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref");
     assert!(
         p.exists(),
         "differential oracle missing: {} (build bennett-isa-spec first)",
@@ -28,7 +23,7 @@ fn ref_bin() -> PathBuf {
 }
 
 fn fixtures_dir() -> PathBuf {
-    workspace().join("bennett-isa-spec/reference-interpreter/tests/fixtures")
+    sibling::isa().join("reference-interpreter/tests/fixtures")
 }
 
 fn ref_check(path: &Path) -> Result<Value, String> {
@@ -118,9 +113,8 @@ fn check_agrees_on_every_fixture() {
 /// `bennett-object`) from the published spec and check agreement on them.
 #[test]
 fn check_agrees_on_spec_examples() {
-    let spec =
-        std::fs::read_to_string(workspace().join("bennett-isa-spec/spec/Bennett-ISA-Spec.md"))
-            .expect("read ISA spec");
+    let spec = std::fs::read_to_string(sibling::isa().join("spec/Bennett-ISA-Spec.md"))
+        .expect("read ISA spec");
     let mut examples: Vec<String> = Vec::new();
     let mut current: Option<String> = None;
     for line in spec.lines() {

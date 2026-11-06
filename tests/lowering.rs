@@ -5,7 +5,9 @@
 #[path = "support/fixtures.rs"]
 #[allow(dead_code)]
 mod fixtures;
-use std::path::{Path, PathBuf};
+#[path = "support/sibling.rs"]
+mod sibling;
+use std::path::PathBuf;
 
 use bennett_circuits::flatten::flatten;
 use bennett_circuits::ir::{BaseGate, Node};
@@ -13,8 +15,7 @@ use bennett_circuits::lower::lower_program;
 use bennett_circuits::object::Object;
 
 fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../bennett-isa-spec/reference-interpreter/tests/fixtures")
+    sibling::isa().join("reference-interpreter/tests/fixtures")
 }
 
 fn fixture(name: &str) -> Object {

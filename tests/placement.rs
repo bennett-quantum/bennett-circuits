@@ -1,3 +1,5 @@
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/exact.rs"]
 mod exact;
 #[path = "support/fixtures.rs"]
@@ -131,10 +133,7 @@ fn borrowed_wires_keep_dedicated_slots_including_arbitrary_dirty_inputs() {
 }
 #[test]
 fn placed_fixture_actions_match_unplaced_exact_states() {
-    let dir = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/tests/fixtures"
-    );
+    let dir = sibling::isa().join("reference-interpreter/tests/fixtures");
     let mut actions = 0;
     let mut tuples = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
@@ -171,10 +170,7 @@ fn placement_rejects_unimplemented_schedule_consumption_by_upstream_bead() {
 
 #[test]
 fn local_region_image_wires_are_pinned_and_validation_cannot_be_bypassed() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/tests/fixtures/actions.bisa"
-    );
+    let path = sibling::isa().join("reference-interpreter/tests/fixtures/actions.bisa");
     let text = std::fs::read_to_string(path).unwrap();
     let o = Object::parse(&text).unwrap();
     let p = place_action(&o, "memory", &[]).unwrap();

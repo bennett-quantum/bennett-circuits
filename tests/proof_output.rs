@@ -1,3 +1,5 @@
+#[path = "support/sibling.rs"]
+mod sibling;
 use bennett_circuits::{
     json::Value,
     linking::Registry,
@@ -353,10 +355,7 @@ fn linking_keeps_and_rechecks_library_certificates() {
 #[test]
 fn certificates_replayed_against_reference_cli() {
     use std::process::Command;
-    let binary = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"
-    );
+    let binary = sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref");
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/m4-reference");
     std::fs::create_dir_all(&dir).unwrap();
     let o = object("perm_action @a (x:wire mut) () () () ()\n^entry():\nx x\n")
@@ -365,7 +364,7 @@ fn certificates_replayed_against_reference_cli() {
     let source = dir.join("source.bisa");
     std::fs::write(&source, o.text()).unwrap();
     for command in ["check", "hash"] {
-        let output = Command::new(binary)
+        let output = Command::new(&binary)
             .arg(command)
             .arg(&source)
             .output()
@@ -422,7 +421,7 @@ fn certificates_replayed_against_reference_cli() {
             .unwrap()[0]
             .as_str()
             .unwrap();
-        let output = Command::new(binary)
+        let output = Command::new(&binary)
             .arg("run-action")
             .arg(&source)
             .args(["a", "--basis", before])
@@ -446,7 +445,7 @@ fn certificates_replayed_against_reference_cli() {
     let path = dir.join("certified.bisa");
     std::fs::write(&path, certified.materialize().unwrap().text()).unwrap();
     for command in ["check", "hash"] {
-        let output = Command::new(binary)
+        let output = Command::new(&binary)
             .arg(command)
             .arg(&path)
             .output()
@@ -953,12 +952,9 @@ fn every_oracle_certificate_row_replays_with_arbitrary_targets_and_faults() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("source.bisa");
     std::fs::write(&path, o.text()).unwrap();
-    let binary = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"
-    );
+    let binary = sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref");
     for command in ["check", "hash"] {
-        let output = Command::new(binary)
+        let output = Command::new(&binary)
             .arg(command)
             .arg(&path)
             .output()
@@ -1015,7 +1011,7 @@ fn every_oracle_certificate_row_replays_with_arbitrary_targets_and_faults() {
     for row in rows {
         let before = row_bits(row.get("before").unwrap());
         let after = row_bits(row.get("after").unwrap());
-        let output = Command::new(binary)
+        let output = Command::new(&binary)
             .arg("run-action")
             .arg(&path)
             .args(["probe", "--basis", &before, "--arg", "token:1,0,0,0"])
@@ -1038,7 +1034,7 @@ fn every_oracle_certificate_row_replays_with_arbitrary_targets_and_faults() {
     let path = dir.join("certified.bisa");
     std::fs::write(&path, bound.materialize().unwrap().text()).unwrap();
     for command in ["check", "hash"] {
-        let output = Command::new(binary)
+        let output = Command::new(&binary)
             .arg(command)
             .arg(&path)
             .output()

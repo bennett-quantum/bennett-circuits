@@ -1,5 +1,7 @@
 #[path = "support/exact.rs"]
 mod exact;
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/sim.rs"]
 mod sim;
 use bennett_circuits::{
@@ -12,11 +14,8 @@ use bennett_circuits::{
 #[test]
 fn qinplace_all_basis_and_adjoint() {
     let o = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/conformance/cases/objects/qinplace.bisa"
-        ))
-        .unwrap(),
+        &std::fs::read_to_string(sibling::isa().join("conformance/cases/objects/qinplace.bisa"))
+            .unwrap(),
     )
     .unwrap();
     let p = lower_program_with_args(
@@ -132,10 +131,10 @@ fn cli_exports_a_budget_specialised_oracle() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_bennett-circuits"))
         .args([
             "export-qasm",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"
-            ),
+            sibling::isa()
+                .join("reference-interpreter/tests/fixtures/inc8.bisa")
+                .to_str()
+                .unwrap(),
             "inc8",
             "--budget",
             "0,0,0,0",
@@ -154,11 +153,9 @@ fn cli_exports_a_budget_specialised_oracle() {
 }
 #[test]
 fn qinplace_requires_fault_free_inverse_pair_under_the_actual_token() {
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/conformance/cases/objects/qinplace.bisa"
-    ))
-    .unwrap();
+    let text =
+        std::fs::read_to_string(sibling::isa().join("conformance/cases/objects/qinplace.bisa"))
+            .unwrap();
     for (text, steps) in [
         (text.clone(), 0),
         (
@@ -184,15 +181,12 @@ fn qinplace_requires_fault_free_inverse_pair_under_the_actual_token() {
 #[test]
 fn compiled_basis_cli_serves_suite_f_execution_cases() {
     use bennett_circuits::json::Value;
-    let base = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/conformance/cases/objects"
-    );
+    let base = sibling::isa().join("conformance/cases/objects");
     for (args, field, value) in [
         (
             vec![
                 "run-oracle".to_string(),
-                format!("{base}/mutual.bisa"),
+                base.join("mutual.bisa").to_str().unwrap().to_owned(),
                 "main".into(),
                 "--input".into(),
                 "".into(),
@@ -205,7 +199,7 @@ fn compiled_basis_cli_serves_suite_f_execution_cases() {
         (
             vec![
                 "run-action".into(),
-                format!("{base}/qinplace.bisa"),
+                base.join("qinplace.bisa").to_str().unwrap().to_owned(),
                 "inc_inplace".into(),
                 "--mut".into(),
                 "0".into(),
@@ -272,10 +266,9 @@ fn pointer_specialisation_rejects_invalid_or_out_of_range_values() {
 #[test]
 fn basis_diagnostics_do_not_materialise_halt_padding_for_large_budgets() {
     let o = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"
-        ))
+        &std::fs::read_to_string(
+            sibling::isa().join("reference-interpreter/tests/fixtures/inc8.bisa"),
+        )
         .unwrap(),
     )
     .unwrap();

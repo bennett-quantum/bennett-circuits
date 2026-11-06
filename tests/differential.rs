@@ -2,6 +2,8 @@
 //! simulation of exported QASM, phase-sensitive binary64 display comparison.
 #[path = "support/exact.rs"]
 mod exact;
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/sim.rs"]
 mod sim;
 #[path = "support/target.rs"]
@@ -16,16 +18,13 @@ fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 fn corpus() -> Vec<PathBuf> {
-    let workspace = root().parent().unwrap().to_path_buf();
-    let mut paths =
-        std::fs::read_dir(workspace.join("bennett-isa-spec/reference-interpreter/tests/fixtures"))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|e| e == "bisa"))
-            .collect::<Vec<_>>();
+    let mut paths = std::fs::read_dir(sibling::isa().join("reference-interpreter/tests/fixtures"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "bisa"))
+        .collect::<Vec<_>>();
     paths.sort();
-    let spec = std::fs::read_to_string(workspace.join("bennett-isa-spec/spec/Bennett-ISA-Spec.md"))
-        .unwrap();
+    let spec = std::fs::read_to_string(sibling::isa().join("spec/Bennett-ISA-Spec.md")).unwrap();
     let dir = root().join(".tmp/differential");
     std::fs::create_dir_all(&dir).unwrap();
     let mut examples = 0;
@@ -82,10 +81,7 @@ fn state(stdout: &str) -> BTreeMap<String, (f64, f64)> {
 }
 #[test]
 fn every_action_every_basis_matches_run_action() {
-    let binary = root()
-        .parent()
-        .unwrap()
-        .join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
+    let binary = sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref");
     assert!(
         binary.is_file(),
         "build the reference binary separately: {}",

@@ -1,3 +1,5 @@
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/fixtures.rs"]
 #[allow(dead_code)]
 mod fixtures;
@@ -5,8 +7,7 @@ use bennett_circuits::{object::Object, qasm};
 
 #[test]
 fn fixture_roundtrips_and_executable_text_agrees() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../bennett-isa-spec/reference-interpreter/tests/fixtures");
+    let dir = sibling::isa().join("reference-interpreter/tests/fixtures");
     let mut actions = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -38,8 +39,7 @@ fn fixture_roundtrips_and_executable_text_agrees() {
 
 #[test]
 fn cli_exports_hierarchy_and_rejects_stale_metadata() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../bennett-isa-spec/reference-interpreter/tests/fixtures/control_flow.bisa");
+    let path = sibling::isa().join("reference-interpreter/tests/fixtures/control_flow.bisa");
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_bennett-circuits"))
         .args(["export-qasm", path.to_str().unwrap(), "controlled_phase"])
         .output()
@@ -58,8 +58,7 @@ fn cli_exports_hierarchy_and_rejects_stale_metadata() {
 #[test]
 fn cli_rejects_corrupted_stored_identity_before_export() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let fixture =
-        root.join("../bennett-isa-spec/reference-interpreter/tests/fixtures/control_flow.bisa");
+    let fixture = sibling::isa().join("reference-interpreter/tests/fixtures/control_flow.bisa");
     let text = std::fs::read_to_string(fixture).unwrap();
     let corrupt = text.replace("rz 6.283185307179586 t", "rz 3.0 t");
     assert_ne!(corrupt, text);

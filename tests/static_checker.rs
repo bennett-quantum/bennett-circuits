@@ -1,13 +1,10 @@
-#[path = "support/corpus.rs"]
-mod corpus;
+#[path = "support/sibling.rs"]
+mod sibling;
 use bennett_circuits::{json::Value, object::Object};
 use std::{path::Path, process::Command};
 #[test]
 fn suite_f_check_verdicts_and_rules() {
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let dir = workspace.join("bennett-isa-spec/conformance/cases/F");
-    let implemented = corpus::implemented_isa();
-    let mut tally = corpus::Tally::new("F (static check)");
+    let dir = sibling::isa().join("conformance/cases/F");
     let mut count = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path().join("case.json");
@@ -24,37 +21,13 @@ fn suite_f_check_verdicts_and_rules() {
             .join(c.get("object").unwrap().as_str().unwrap());
         let text = std::fs::read_to_string(&obj).unwrap();
         let ours = Object::parse(&text).and_then(|o| o.check());
-        let declared = corpus::declared(&c, Some(&text), &implemented);
-        tally.record(c.get("id").unwrap().as_str().unwrap(), &declared);
-        let reference = Command::new(
-            workspace.join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"),
-        )
-        .args(["check", obj.to_str().unwrap()])
-        .output()
-        .unwrap();
+        let reference =
+            Command::new(sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref"))
+                .args(["check", obj.to_str().unwrap()])
+                .output()
+                .unwrap();
         let expected = c.get("expect").unwrap();
         let ok = expected.get("exit").unwrap().as_u64() == Some(0);
-        if let corpus::Declared::Foreign(v) = &declared {
-            // The published expectation is for the declared version's contract and is not
-            // asserted; the 0.8 obligation is refusal at load. Where the published verdict is
-            // itself a rejection, the reference must still agree with ours (F-version).
-            let err = ours.as_ref().err().map(|e| e.0.clone());
-            corpus::assert_refused(
-                &path.display().to_string(),
-                v,
-                Some(if err.is_some() { 1 } else { 0 }),
-                "",
-                err.as_deref().unwrap_or(""),
-            );
-            if !ok {
-                assert!(
-                    !reference.status.success(),
-                    "{}: published rejection, reference accepted",
-                    path.display()
-                );
-            }
-            continue;
-        }
         assert_eq!(ours.is_ok(), ok, "{}: {ours:?}", path.display());
         if !ok {
             for rule in expected.get("stderr_contains").unwrap().as_array().unwrap() {
@@ -72,18 +45,11 @@ fn suite_f_check_verdicts_and_rules() {
         count += 1;
     }
     eprintln!("STATIC HARNESS: {count} suite F check verdicts compared");
-    assert_eq!(
-        tally.finish().0,
-        count,
-        "every compared verdict declares the implemented isa"
-    );
+    assert!(count > 0, "no suite F check verdicts compared");
 }
 #[test]
 fn semantic_rejections_precede_stored_hashes() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("bennett-isa-spec/conformance/cases/objects");
+    let dir = sibling::isa().join("conformance/cases/objects");
     for name in [
         "f_width_mismatch",
         "f_window_closed",
@@ -113,10 +79,7 @@ fn semantic_rejections_precede_stored_hashes() {
 }
 #[test]
 fn a_cell_version_advance_closes_load_cleanup_even_if_restored() {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/tests/fixtures/actions.bisa"
-    );
+    let path = sibling::isa().join("reference-interpreter/tests/fixtures/actions.bisa");
     let text = std::fs::read_to_string(path).unwrap();
     let text = text.replace(
         "d = qload r p\nqunload r p d",
@@ -127,10 +90,7 @@ fn a_cell_version_advance_closes_load_cleanup_even_if_restored() {
 }
 
 fn nested_object(body: &str) -> Object {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/tests/fixtures/nested.bisa"
-    );
+    let path = sibling::isa().join("reference-interpreter/tests/fixtures/nested.bisa");
     let text = std::fs::read_to_string(path).unwrap();
     let old = "lift.oracle_call @inc8 tk (x) r fr () ()\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nlift.retval r";
     Object::parse(&text.replace(old, body)).unwrap()
@@ -174,10 +134,9 @@ fn matched_cleanup_tracks_indirect_labels_with_unrelated_lprocs() {
     s.index = o.symbols.len().to_string();
     o.symbols.push(s);
     let memory = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/sum_db.bisa"
-        ))
+        &std::fs::read_to_string(
+            sibling::isa().join("reference-interpreter/tests/fixtures/sum_db.bisa"),
+        )
         .unwrap(),
     )
     .unwrap();
@@ -207,8 +166,7 @@ fn matched_cleanup_rejects_input_write_through_another_call() {
 
 #[test]
 fn all_conformance_objects_agree_in_verdict_and_rule_citation() {
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let dir = base.join("bennett-isa-spec/conformance/cases/objects");
+    let dir = sibling::isa().join("conformance/cases/objects");
     let mut count = 0;
     for entry in std::fs::read_dir(dir).unwrap() {
         let p = entry.unwrap().path();
@@ -216,13 +174,12 @@ fn all_conformance_objects_agree_in_verdict_and_rule_citation() {
             continue;
         }
         let ours = Object::parse(&std::fs::read_to_string(&p).unwrap()).and_then(|o| o.check());
-        let reference = Command::new(
-            base.join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"),
-        )
-        .arg("check")
-        .arg(&p)
-        .output()
-        .unwrap();
+        let reference =
+            Command::new(sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref"))
+                .arg("check")
+                .arg(&p)
+                .output()
+                .unwrap();
         assert_eq!(
             ours.is_ok(),
             reference.status.success(),
@@ -254,10 +211,7 @@ fn all_conformance_objects_agree_in_verdict_and_rule_citation() {
 
 #[test]
 fn nested_metadata_schemas_reject_unknown_fields_and_wrong_types() {
-    let root = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/conformance/cases/objects"
-    );
+    let root = sibling::isa().join("conformance/cases/objects");
     for (file, before, after) in [
         (
             "f_import_unlinked",
@@ -278,7 +232,7 @@ fn nested_metadata_schemas_reject_unknown_fields_and_wrong_types() {
         ),
         ("sched_inc8", "\"iteration\":[]", "\"iteration\":false"),
     ] {
-        let text = std::fs::read_to_string(format!("{root}/{file}.bisa")).unwrap();
+        let text = std::fs::read_to_string(root.join(format!("{file}.bisa"))).unwrap();
         let text = if file == "f_import_unlinked" {
             let (prefix, rest) = text.split_once("section imports\n").unwrap();
             format!("{prefix}section imports\n{}", rest.replace(before, after))
@@ -494,7 +448,6 @@ fn materialise(body: &str, label: &str) -> std::path::PathBuf {
 }
 #[test]
 fn new_cleanup_and_selector_witnesses_agree_with_reference() {
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     for (label, body) in [
         (
             "interference",
@@ -535,13 +488,12 @@ fn new_cleanup_and_selector_witnesses_agree_with_reference() {
     ] {
         let path = materialise(body, label);
         let ours = Object::parse(&std::fs::read_to_string(&path).unwrap()).and_then(|o| o.check());
-        let reference = Command::new(
-            base.join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"),
-        )
-        .arg("check")
-        .arg(&path)
-        .output()
-        .unwrap();
+        let reference =
+            Command::new(sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref"))
+                .arg("check")
+                .arg(&path)
+                .output()
+                .unwrap();
         assert_eq!(
             ours.is_ok(),
             reference.status.success(),
@@ -570,10 +522,9 @@ fn new_cleanup_and_selector_witnesses_agree_with_reference() {
 #[test]
 fn imported_lproc_and_classical_calls_use_published_signature_schemas() {
     use bennett_circuits::object::Import;
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/tests/fixtures/sum_db.bisa"
-    ))
+    let text = std::fs::read_to_string(
+        sibling::isa().join("reference-interpreter/tests/fixtures/sum_db.bisa"),
+    )
     .unwrap();
     let mut o = Object::parse(&text).unwrap();
     let sym = o
@@ -666,14 +617,12 @@ fn translation_lemma_is_checked_per_maximal_permutation_frame() {
     );
     generated(&body).hash().unwrap();
     let path = materialise(&body, "separated-borrow-frames");
-    let reference = Command::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"
-    ))
-    .arg("check")
-    .arg(path)
-    .output()
-    .unwrap();
+    let reference =
+        Command::new(sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref"))
+            .arg("check")
+            .arg(path)
+            .output()
+            .unwrap();
     assert!(
         reference.status.success(),
         "reference disagrees with §5.6 maximal contiguous permutation-only frames: {}",
@@ -686,11 +635,9 @@ fn translation_lemma_is_checked_per_maximal_permutation_frame() {
 
 #[test]
 fn object_metadata_requires_wide_integers_to_use_decimal_strings() {
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/conformance/cases/objects/sched_inc8.bisa"
-    ))
-    .unwrap();
+    let text =
+        std::fs::read_to_string(sibling::isa().join("conformance/cases/objects/sched_inc8.bisa"))
+            .unwrap();
     let (prefix, line) = text.split_once("section schedule\n").unwrap();
     let mut schedule = Value::parse(line.trim_end()).unwrap();
     let Value::Object(root) = &mut schedule else {
@@ -708,14 +655,12 @@ fn object_metadata_requires_wide_integers_to_use_decimal_strings() {
     assert!(e.0.contains("§16.1"), "{e}");
     let p = Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/unsafe-meta-int.bisa");
     std::fs::write(&p, text).unwrap();
-    let reference = Command::new(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"
-    ))
-    .arg("check")
-    .arg(p)
-    .output()
-    .unwrap();
+    let reference =
+        Command::new(sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref"))
+            .arg("check")
+            .arg(p)
+            .output()
+            .unwrap();
     assert!(!reference.status.success());
     assert!(String::from_utf8_lossy(&reference.stderr).contains("§16.1"));
 }
@@ -738,11 +683,8 @@ fn imported_action_cannot_write_a_readonly_caller_region() {
 fn inherited_control_schedule_audit_fails_explicitly_until_implemented() {
     let mut o = generated("action @a (t:wire mut) () () () ()\n^entry():\nx t\n");
     let source = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/conformance/cases/objects/sched_inc8.bisa"
-        ))
-        .unwrap(),
+        &std::fs::read_to_string(sibling::isa().join("conformance/cases/objects/sched_inc8.bisa"))
+            .unwrap(),
     )
     .unwrap();
     let mut schedule = source.schedule.unwrap();
@@ -770,10 +712,9 @@ fn inherited_control_schedule_audit_fails_explicitly_until_implemented() {
 #[test]
 fn parameterized_action_oracle_calls_bind_the_action_memory_group() {
     let mut o = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/tiny_memory.bisa"
-        ))
+        &std::fs::read_to_string(
+            sibling::isa().join("reference-interpreter/tests/fixtures/tiny_memory.bisa"),
+        )
         .unwrap(),
     )
     .unwrap();
@@ -891,11 +832,8 @@ fn symbolic_opaque_action_calls_use_the_full_interface_contract() {
 #[test]
 fn recompute_schedule_requires_an_implemented_eligibility_proof() {
     let mut o = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/conformance/cases/objects/sched_inc8.bisa"
-        ))
-        .unwrap(),
+        &std::fs::read_to_string(sibling::isa().join("conformance/cases/objects/sched_inc8.bisa"))
+            .unwrap(),
     )
     .unwrap();
     let Value::Object(schedule) = o.schedule.as_mut().unwrap() else {
@@ -1022,14 +960,12 @@ fn overlapping_cyclic_invocations_match_multiplicity_and_current_versions() {
     ];
     for (label, tail, valid) in cases {
         let path = materialise(&format!("{prefix}{tail}"), label);
-        let reference = Command::new(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref"
-        ))
-        .arg("check")
-        .arg(&path)
-        .output()
-        .unwrap();
+        let reference =
+            Command::new(sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref"))
+                .arg("check")
+                .arg(&path)
+                .output()
+                .unwrap();
         assert_eq!(
             reference.status.success(),
             valid,

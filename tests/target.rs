@@ -1,3 +1,5 @@
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/exact.rs"]
 #[allow(dead_code)]
 mod exact;
@@ -13,16 +15,18 @@ use bennett_circuits::{
     placement::place_on_target,
     target::{Rational, Target},
 };
-const ROOT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../bennett-isa-spec/conformance/cases/E"
-);
 #[test]
 fn published_exact_target_load_and_forbidden_eps_reference() {
-    let text = std::fs::read_to_string(format!("{ROOT}/E-epsilon-zero-exact/target.json")).unwrap();
+    let text = std::fs::read_to_string(
+        sibling::isa().join("conformance/cases/E/E-epsilon-zero-exact/target.json"),
+    )
+    .unwrap();
     let t = Target::parse(&text).unwrap();
     assert_eq!(t.hash.len(), 64);
-    let bad = std::fs::read_to_string(format!("{ROOT}/E-epsilon-zero-entry/target.json")).unwrap();
+    let bad = std::fs::read_to_string(
+        sibling::isa().join("conformance/cases/E/E-epsilon-zero-entry/target.json"),
+    )
+    .unwrap();
     assert!(Target::parse(&bad).unwrap_err().0.contains("§8.1"));
     assert!(
         Target::parse(&(text + "\n"))
@@ -72,11 +76,7 @@ fn target_placement_matches_unplaced_fixture_states() {
     );
     let t = Target::parse(&value.to_jcs()).unwrap();
     let mut count = 0;
-    for e in std::fs::read_dir(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../bennett-isa-spec/reference-interpreter/tests/fixtures"
-    ))
-    .unwrap()
+    for e in std::fs::read_dir(sibling::isa().join("reference-interpreter/tests/fixtures")).unwrap()
     {
         let path = e.unwrap().path();
         if path.extension().is_none_or(|s| s != "bisa") {
@@ -545,16 +545,18 @@ fn zero_time_does_not_erase_scheme_capacity_requirement() {
 
 #[test]
 fn oracle_placement_annotations_bind_budget_and_exact_target_hash() {
-    let file = std::fs::read_to_string(format!("{ROOT}/E-jcs-target-hash/target.json")).unwrap();
+    let file = std::fs::read_to_string(
+        sibling::isa().join("conformance/cases/E/E-jcs-target-hash/target.json"),
+    )
+    .unwrap();
     assert_eq!(
         Target::parse(&file).unwrap().hash,
         "71e1973c642abe3ea4ae5b4c7211fd4e2b2b7817894ca958d138c992cc321596"
     );
     let o = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"
-        ))
+        &std::fs::read_to_string(
+            sibling::isa().join("reference-interpreter/tests/fixtures/inc8.bisa"),
+        )
         .unwrap(),
     )
     .unwrap();

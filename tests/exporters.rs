@@ -1,4 +1,6 @@
 //! Executable-text validation of QIR and Quil, independent of the IR comments.
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/exact.rs"]
 #[allow(dead_code)]
 mod exact;
@@ -169,8 +171,7 @@ fn zero_wire_identity_is_valid_without_a_sentinel() {
 #[test]
 fn cli_exports_actions_tokens_and_bounded_oracles() {
     use std::process::Command;
-    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../bennett-isa-spec/reference-interpreter/tests/fixtures");
+    let fixtures = sibling::isa().join("reference-interpreter/tests/fixtures");
     for (fixture, name, options) in [
         ("control_flow.bisa", "controlled_phase", vec![]),
         ("r9-sol-oracle.bisa", "a", vec!["--arg", "token:1,0,0,0"]),

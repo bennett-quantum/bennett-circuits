@@ -1,5 +1,7 @@
 #[path = "support/exact.rs"]
 mod exact;
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/sim.rs"]
 mod sim;
 #[path = "support/target.rs"]
@@ -12,10 +14,9 @@ use bennett_circuits::{
 #[test]
 fn literal_inc8_commits_and_reverses_all_workspace() {
     let o = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/inc8.bisa"
-        ))
+        &std::fs::read_to_string(
+            sibling::isa().join("reference-interpreter/tests/fixtures/inc8.bisa"),
+        )
         .unwrap(),
     )
     .unwrap();
@@ -71,20 +72,16 @@ fn every_oracle_matches_cli_on_basis_tuples() {
         process::Command,
     };
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace = root.parent().unwrap();
-    let binary =
-        workspace.join("bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref");
-    let mut paths =
-        std::fs::read_dir(workspace.join("bennett-isa-spec/reference-interpreter/tests/fixtures"))
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.extension().is_some_and(|e| e == "bisa"))
-            .collect::<Vec<PathBuf>>();
+    let binary = sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref");
+    let mut paths = std::fs::read_dir(sibling::isa().join("reference-interpreter/tests/fixtures"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "bisa"))
+        .collect::<Vec<PathBuf>>();
     paths.sort();
     let dir = root.join(".tmp/oracles");
     std::fs::create_dir_all(&dir).unwrap();
-    let spec = std::fs::read_to_string(workspace.join("bennett-isa-spec/spec/Bennett-ISA-Spec.md"))
-        .unwrap();
+    let spec = std::fs::read_to_string(sibling::isa().join("spec/Bennett-ISA-Spec.md")).unwrap();
     for (n, block) in spec
         .split("```")
         .filter(|b| b.trim_start().starts_with("bennett-object "))
@@ -313,10 +310,9 @@ fn every_oracle_matches_cli_on_basis_tuples() {
 #[test]
 fn allocator_assignment_slots_follow_spec_order() {
     let o = Object::parse(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../bennett-isa-spec/reference-interpreter/tests/fixtures/heap.bisa"
-        ))
+        &std::fs::read_to_string(
+            sibling::isa().join("reference-interpreter/tests/fixtures/heap.bisa"),
+        )
         .unwrap(),
     )
     .unwrap();
