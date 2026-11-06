@@ -16,54 +16,64 @@ fn contains(actual: &Value, expected: &Value) -> bool {
 }
 #[test]
 fn suite_a_execution_and_reversal() {
-    acceptance("A", |c| {
-        if c.get("command").is_none() {
-            assert!(c.get("unavailable").is_some(), "unclassified case: {c}");
-            eprintln!(
-                "A unavailable (published staged case): {}",
-                c.get("id").unwrap()
-            );
-            false
-        } else {
-            true
-        }
-    });
+    assert!(
+        acceptance("A", |c| {
+            if c.get("command").is_none() {
+                assert!(c.get("unavailable").is_some(), "unclassified case: {c}");
+                eprintln!(
+                    "A unavailable (published staged case): {}",
+                    c.get("id").unwrap()
+                );
+                false
+            } else {
+                true
+            }
+        }) > 0
+    );
 }
 #[test]
 fn suite_c_action_reversal_and_subbyte_memory() {
-    acceptance("C", |c| {
-        matches!(
-            c.get("id").and_then(Value::as_str),
-            Some("C-action-reverse-adjoint" | "C-qmem-exchange")
-        )
-    });
+    assert!(
+        acceptance("C", |c| {
+            matches!(
+                c.get("id").and_then(Value::as_str),
+                Some("C-action-reverse-adjoint" | "C-qmem-exchange")
+            )
+        }) > 0
+    );
 }
 #[test]
 fn suite_h_expansion_refusal() {
-    acceptance("H", |c| c.get("command").is_some());
+    assert!(acceptance("H", |c| c.get("command").is_some()) > 0);
 }
 #[test]
 fn suite_d_exact_actions() {
-    acceptance("D", |c| {
-        c.get("command").is_some() && c.get("unavailable").is_none()
-    });
+    assert!(
+        acceptance("D", |c| {
+            c.get("command").is_some() && c.get("unavailable").is_none()
+        }) > 0
+    );
 }
 #[test]
 fn suite_g_one_shot_launch() {
-    acceptance("G", |c| {
-        c.get("command").is_some() && c.get("unavailable").is_none()
-    });
+    assert!(
+        acceptance("G", |c| {
+            c.get("command").is_some() && c.get("unavailable").is_none()
+        }) > 0
+    );
 }
 #[test]
 fn suite_b_prefix_reversal_and_step_check() {
-    acceptance("B", |c| {
-        matches!(
-            c.get("command").unwrap().as_array().unwrap()[0].as_str(),
-            Some("reverse" | "step-check")
-        )
-    });
+    assert!(
+        acceptance("B", |c| {
+            matches!(
+                c.get("command").unwrap().as_array().unwrap()[0].as_str(),
+                Some("reverse" | "step-check")
+            )
+        }) > 0
+    );
 }
-fn acceptance(suite: &str, include: impl Fn(&Value) -> bool) {
+fn acceptance(suite: &str, include: impl Fn(&Value) -> bool) -> usize {
     let cases = sibling::isa().join(format!("conformance/cases/{suite}"));
     let mut count = 0;
     for entry in std::fs::read_dir(cases).unwrap() {
@@ -118,4 +128,5 @@ fn acceptance(suite: &str, include: impl Fn(&Value) -> bool) {
         count > 0,
         "suite {suite}: no published expectations checked"
     );
+    count
 }

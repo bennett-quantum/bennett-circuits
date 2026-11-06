@@ -109,7 +109,7 @@ fn matched_cleanup_crosses_cfg_edges_and_handles_loop_fixed_points() {
         "qjump ^again\n^again():\nlift.oracle_call @inc8 tk (x) r fr () ()\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nqbranch p ^again ^done\n^done():\nlift.retval r",
         "qbranch p ^left ^right\n^left():\nlift.oracle_call @inc8 tk (x) r fr () ()\nqjump ^cleanup\n^right():\nlift.oracle_call @inc8 tk (x) r fr () ()\nqjump ^cleanup\n^cleanup():\nlift.oracle_uncall @inc8 tk (x) r fr () ()\nlift.retval r",
     ] {
-        nested_object(body).hash().unwrap();
+        assert_eq!(nested_object(body).hash().unwrap().proof_status, "proved");
     }
 }
 #[test]
@@ -155,7 +155,7 @@ fn matched_cleanup_tracks_indirect_labels_with_unrelated_lprocs() {
             Value::Object(Default::default()),
         );
     }
-    o.hash().unwrap();
+    assert_eq!(o.hash().unwrap().proof_status, "proved");
 }
 #[test]
 fn matched_cleanup_rejects_input_write_through_another_call() {
@@ -287,7 +287,7 @@ fn handle_liveness_is_path_sensitive_and_renames_block_arguments() {
         "fn cc @a () () () () ()\n^entry():\nq = qreg.new any 1\nbr ^done(q)\n^done(r:qreg[1]):\nqreg.free r\nret\n",
         "fn cc @a (p:i1) () () () ()\n^entry():\nbr ^loop()\n^loop():\nq = qreg.new any 1\nqreg.free q\nbr p ^loop() ^done()\n^done():\nret\n",
     ] {
-        generated(body).hash().unwrap();
+        assert_eq!(generated(body).hash().unwrap().proof_status, "proved");
     }
 }
 #[test]
@@ -731,7 +731,7 @@ fn parameterized_action_oracle_calls_bind_the_action_memory_group() {
     action.symbols[0].index = "1".into();
     o.functions.extend(action.functions);
     o.symbols.extend(action.symbols);
-    o.hash().unwrap();
+    assert_eq!(o.hash().unwrap().proof_status, "proved");
 }
 
 #[test]

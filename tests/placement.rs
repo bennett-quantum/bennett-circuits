@@ -1,10 +1,10 @@
-#[path = "support/sibling.rs"]
-mod sibling;
 #[path = "support/exact.rs"]
 mod exact;
 #[path = "support/fixtures.rs"]
 #[allow(dead_code)]
 mod fixtures;
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/sim.rs"]
 mod sim;
 use bennett_circuits::{

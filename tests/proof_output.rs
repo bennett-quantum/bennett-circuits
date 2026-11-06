@@ -1056,7 +1056,7 @@ fn existing_exact_quantum_cancellation_is_preserved_with_unused_tokens() {
     let o = object(
         "action @phase () (x:wire in) () () ()\n^entry():\ns x\naction @a () () () (unused:token) ()\n^entry():\nd = qalloc any 1\nh d\naction_call @phase () (d) () ()\nadj action_call @phase () (d) () ()\nh d\nqfree d\n",
     );
-    o.hash().unwrap();
+    assert_eq!(o.hash().unwrap().proof_status, "proved");
 }
 #[test]
 fn program_relation_compatibility_uses_operand_contracts_not_permutation_markers() {
@@ -1065,7 +1065,7 @@ fn program_relation_compatibility_uses_operand_contracts_not_permutation_markers
         .closure_hash
         .clone()
         .unwrap();
-    bennett_circuits::certificate::generate_program(
+    let cert = bennett_circuits::certificate::generate_program(
         &o,
         "a",
         &[],
@@ -1075,13 +1075,32 @@ fn program_relation_compatibility_uses_operand_contracts_not_permutation_markers
         &h,
     )
     .unwrap();
+    let regions = cert.get("regions").unwrap().as_object().unwrap();
+    let region = &regions[o.hash().unwrap().symbols["a"]
+        .closure_hash
+        .as_ref()
+        .unwrap()];
+    let claims = region.get("claims").unwrap().as_array().unwrap();
+    assert_eq!(
+        claims[0]
+            .get("expected")
+            .unwrap()
+            .get("program")
+            .unwrap()
+            .as_str(),
+        Some(h.as_str())
+    );
+    let mut bound = o;
+    bound.draft_encodings = true;
+    bound.certificate = Some(cert);
+    assert_eq!(bound.check().unwrap().proof_status, "proved");
 }
 #[test]
 fn interface_only_symbolic_loops_are_checked_by_composition_not_unrolled() {
     let o = object(
         "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in) () (tk:token) ()\nregs {  } bounds {1000000000000}\n^entry():\nqloop 1000000000000 {\noracle_call @o tk (x) t fr () ()\n}\n",
     );
-    o.hash().unwrap();
+    assert_eq!(o.hash().unwrap().proof_status, "proved");
 }
 #[test]
 fn budget_guarded_qinplace_does_not_get_a_parameter_uniform_adjoint_claim() {
@@ -1415,7 +1434,10 @@ fn indexed_histories_restore_joint_calls_and_check_each_wire() {
 #[test]
 fn symbolic_while_flags_keep_indexed_selectors_current() {
     let source = "oracle @o (x:wire in) (t:wire) (fr:wire[4]) () ()\n^entry():\nlift.retval x\naction @a (t:wire mut, fr:wire[4] mut) (x:wire in, p:wire[2] in) () (tk:token) ()\nregs { } bounds {2}\n^entry():\nd = qcopy x\nqloop 2 while p {\noracle_call @o tk (d) t fr () ()\noracle_call @o tk (d) t fr () ()\n}\nquncopy x d\n";
-    object(source).hash().unwrap();
+    assert_eq!(object(source).hash().unwrap().proof_status, "proved");
+    let modified_selector =
+        source.replace("oracle_call @o tk (d)", "x p[0]\noracle_call @o tk (d)");
+    assert!(object(&modified_selector).hash().is_err());
 }
 #[test]
 fn symbolic_memory_updates_restore_values_but_advance_load_versions() {
@@ -1771,8 +1793,32 @@ fn borrow_frame_domains_include_nested_lifetimes_even_with_local_borrow() {
     let cert =
         bennett_circuits::certificate::generate(&o, "a", &[], None, true, &context(&target()))
             .unwrap();
+    let regions = cert.get("regions").unwrap().as_object().unwrap();
+    let region = &regions[cert
+        .get("bindings")
+        .unwrap()
+        .get("closure_hash")
+        .unwrap()
+        .as_str()
+        .unwrap()];
+    let claim = &region.get("claims").unwrap().as_array().unwrap()[0];
+    let borrowed = claim
+        .get("domain")
+        .unwrap()
+        .get("borrowed")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        borrowed
+            .iter()
+            .map(|b| b.get("width").unwrap().as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [2, 1]
+    );
+    assert_ne!(borrowed[0].get("name"), borrowed[1].get("name"));
     let mut bound = o;
     bound.draft_encodings = true;
     bound.certificate = Some(cert);
-    bound.check().unwrap();
+    assert_eq!(bound.check().unwrap().proof_status, "proved");
 }

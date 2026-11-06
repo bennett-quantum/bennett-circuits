@@ -1,9 +1,9 @@
 //! Executable-text validation of QIR and Quil, independent of the IR comments.
-#[path = "support/sibling.rs"]
-mod sibling;
 #[path = "support/exact.rs"]
 #[allow(dead_code)]
 mod exact;
+#[path = "support/sibling.rs"]
+mod sibling;
 #[path = "support/sim.rs"]
 mod sim;
 use bennett_circuits::{flatten::flatten, ir::*, qir, quil};
@@ -254,6 +254,7 @@ fn every_gate_every_control_polarity_pattern_has_the_same_exact_state() {
                     } else {
                         quil::parse_flat(&text).unwrap()
                     };
+                    assert_eq!(original.num_qubits, parsed.num_qubits, "{name}: {gate:?}");
                     same_states(&original, &parsed);
                 }
             }

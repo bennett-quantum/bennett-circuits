@@ -28,18 +28,31 @@ fn corpus() -> Vec<PathBuf> {
     let dir = root().join(".tmp/differential");
     std::fs::create_dir_all(&dir).unwrap();
     let mut examples = 0;
-    for block in spec
-        .split("```")
-        .filter(|b| b.trim_start().starts_with("bennett-object "))
-    {
+    for block in published_examples(&spec) {
         let path = dir.join(format!("example-{examples}.bisa"));
         std::fs::write(&path, block.trim_start()).unwrap();
         paths.push(path);
         examples += 1;
     }
-    assert_eq!(examples, 2, "ISA 0.8 spec examples changed; audit corpus");
+    assert!(examples > 0, "pinned ISA spec has no executable examples");
     paths.push(synthetic_corpus());
     paths
+}
+fn published_examples(spec: &str) -> impl Iterator<Item = &str> {
+    spec.split("```")
+        .filter(|b| b.trim_start().starts_with("bennett-object "))
+}
+#[test]
+fn published_example_discovery_has_no_fixed_corpus_size() {
+    let spec = "```\nbennett-object first\n```\nprose\n```\nbennett-object second\n```\n```\nbennett-object third\n```";
+    assert_eq!(
+        published_examples(spec).collect::<Vec<_>>(),
+        [
+            "\nbennett-object first\n",
+            "\nbennett-object second\n",
+            "\nbennett-object third\n"
+        ]
+    );
 }
 // The reference JSON reports finite binary64 numbers. The production JSON
 // codec deliberately admits only integers for hashed metadata; this tiny

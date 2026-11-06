@@ -48,3 +48,18 @@ The five lowest line figures and remaining work are:
 | ir.rs | 72.79% | IR construction errors and malformed geometry are incompletely enumerated; exporter/differential suites exercise valid circuits exhaustively over their basis domains. |
 | step_check.rs | 73.61% | Direct diagnostic row/error variants exceed the small-width row corpus; large-domain diagnostics remain evidence, with explicit errors. |
 | target.rs | 76.77% | Malformed expression/template combinations and version-adoption branches are not all exercised; exact resource and placement witnesses cover valid native/scheme/QRAM paths. |
+
+## Assertion and oracle audit
+
+The audited fourteen tests now either assert reported proof status, declared
+borrow widths `[2, 1]`/distinct lifetime positions, the emitted expected-program
+binding plus certificate replay, nonempty executed conformance counts, or
+exported wire geometry in addition to the existing exhaustive exact-state
+helper assertions. The while-selector test also mutates a protected selector
+and requires rejection. The dirty-workspace simulator test intentionally uses
+`#[should_panic]`, which is an assertion by the test runner.
+`timeout 900 cargo test --offline -j3 --test integration -- --test-threads=4`
+passed 183 tests (one promised ignored) in 29.91 s. Specification examples are
+discovered from the pinned text without a fixed count; a three-example witness
+checks discovery. Expected borrow widths and tuple scope come from the source
+signatures/lifetimes, not captured output.
