@@ -29,6 +29,13 @@ fn suite_f_check_verdicts_and_rules() {
         let expected = c.get("expect").unwrap();
         let ok = expected.get("exit").unwrap().as_u64() == Some(0);
         assert_eq!(ours.is_ok(), ok, "{}: {ours:?}", path.display());
+        if c.get("id").and_then(Value::as_str) == Some("F-version") {
+            assert!(
+                ours.as_ref().unwrap_err().0.contains("unsupported isa=0.7"),
+                "{}: {ours:?}",
+                path.display()
+            );
+        }
         if !ok {
             for rule in expected.get("stderr_contains").unwrap().as_array().unwrap() {
                 assert!(

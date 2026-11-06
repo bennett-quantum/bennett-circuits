@@ -55,6 +55,10 @@ def main():
                 cache.parent.mkdir(parents=True)
                 cache.symlink_to(checkout.resolve(), target_is_directory=True)
         command = ["cargo", "test", "--offline", "--no-fail-fast", "-j3", "--manifest-path", str(consumer / "Cargo.toml")]
+        # Temporary manifests must not overwrite binaries for the real checkout:
+        # Cargo can otherwise reuse their embedded, now-deleted manifest paths.
+        if target_dir := env.get("CARGO_TARGET_DIR"):
+            env["CARGO_TARGET_DIR"] = str(Path(target_dir).resolve() / "pin-readers")
         for reader in readers:
             command.extend(["--test", reader])
         command.extend(["--", "--test-threads=4"])
