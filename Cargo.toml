@@ -2,12 +2,22 @@
 name = "bennett-circuits"
 version = "0.1.0"
 edition = "2024"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+[[test]]
+name = "oracles"
+path = "tests/oracles.rs"
 
 [dependencies]
 
 # The gate executes multi-million-gate reversible machines. Keep test
 # assertions and overflow checks while avoiding unoptimised kernel runtimes.
 [profile.test]
+debug = "line-tables-only"
 opt-level = 1
 debug-assertions = true
 overflow-checks = true

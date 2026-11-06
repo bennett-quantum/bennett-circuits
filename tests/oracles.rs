@@ -12,6 +12,7 @@ use bennett_circuits::{
     oracle::{Budget, specialise},
 };
 #[test]
+#[ignore = "slow: literal oracle materialisation needs approximately 7 GB"]
 fn literal_inc8_commits_and_reverses_all_workspace() {
     let o = Object::parse(
         &std::fs::read_to_string(
@@ -61,6 +62,7 @@ fn literal_inc8_commits_and_reverses_all_workspace() {
 }
 
 #[test]
+#[ignore = "slow: full oracle/reference differential materialises large circuits"]
 fn every_oracle_matches_cli_on_basis_tuples() {
     use bennett_circuits::{
         json::Value,

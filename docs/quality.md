@@ -17,3 +17,15 @@ test retains the requested capability. Evidence: `symbolic-red.log` and
 reference-contract regressions from the experimental extension.
 
 Further measurements and the quality baseline are recorded below as completed.
+
+## Default test budget
+
+`CARGO_TARGET_DIR=.tmp/quality-circuits/target /usr/bin/time -f
+"wall_seconds=%e peak_kb=%M" timeout 180 cargo test --offline -j3 --
+--test-threads=4` passed in **22.00 s**, peak **128280 KiB**, after a separate
+cold build (141 s). Test profile keeps optimisation, assertions and overflow
+checks, with line-table debug information. Two integration binaries replace
+15 independently linked binaries. Two large oracle tests are explicitly
+ignored in the default run; `gate.toml` runs them with `--ignored` and one
+thread. Their approximately 7 GB historical peak is a resource requirement,
+not a reduced semantic domain. The symbolic-object promised test is separate.
