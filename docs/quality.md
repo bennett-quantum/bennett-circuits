@@ -29,3 +29,22 @@ checks, with line-table debug information. Two integration binaries replace
 ignored in the default run; `gate.toml` runs them with `--ignored` and one
 thread. Their approximately 7 GB historical peak is a resource requirement,
 not a reduced semantic domain. The symbolic-object promised test is separate.
+
+## Coverage
+
+`CARGO_TARGET_DIR=.tmp/quality-circuits/target timeout 900 cargo llvm-cov
+--offline -j3 --summary-only -- --test-threads=4` passed: **85.08% lines**
+(18,021 lines, 2,689 missed), **77.20% functions**, **81.66% regions**.
+Siblings used the gate pin. This default-suite measurement excludes the two
+ignored large oracle tests and the explicitly promised symbolic-object test.
+It includes all maintained default test binaries; there is no coverage threshold.
+
+The five lowest line figures and remaining work are:
+
+| Module | Lines | Reason for remaining uncovered paths |
+|---|---:|---|
+| main.rs | 65.29% | CLI malformed-option combinations and schedule/target-launch paths exceed the current diagnostic command corpus; executable schedule adoption has an explicit library dependency. |
+| linking.rs | 72.75% | Transitive conflict, certificate-DAG and malformed closure combinations remain beyond the existing linked-program replay witnesses. |
+| ir.rs | 72.79% | IR construction errors and malformed geometry are incompletely enumerated; exporter/differential suites exercise valid circuits exhaustively over their basis domains. |
+| step_check.rs | 73.61% | Direct diagnostic row/error variants exceed the small-width row corpus; large-domain diagnostics remain evidence, with explicit errors. |
+| target.rs | 76.77% | Malformed expression/template combinations and version-adoption branches are not all exercised; exact resource and placement witnesses cover valid native/scheme/QRAM paths. |
