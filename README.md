@@ -1,109 +1,89 @@
 # bennett-circuits
 
-The bounded circuit specialiser: hierarchical circuit IR, placement, proof-carrying output, and exporters (OpenQASM 3, QIR, Quil).
+A bounded circuit specialiser with hierarchical circuit IR, clean-workspace
+placement, target resource accounting, proof-carrying output, and OpenQASM 3,
+QIR and Quil exporters. The Rust crate has no external crate dependencies.
 
-Depends (by published spec, not by shared code) on: bennett-isa-spec and bennett-sched.
+Workspace handoff: [bennett/HANDOFF.md](../bennett/HANDOFF.md).
 
-Part of the Bennett reboot workspace. ISA 0.8 action circuits and OpenQASM 3 are implemented; see HANDOFF.md and docs/PLAN.md.
+Source objects and targets use ISA 0.8. Typed frame and claim metadata requires
+explicit `--isa 0.9-draft` opt-in; this does not silently migrate source objects
+to ISA 0.9. [SPEC_VERSIONS.toml](SPEC_VERSIONS.toml) records that boundary.
+Remaining contract/adoption work stays in Beads. [docs/quality.md](docs/quality.md)
+records measured test time, coverage, independent oracles and the quality ratchet.
 
+## Prepare the pinned test oracle
 
-Std-only Rust crate. Local gates (headless, project-local `TMPDIR`):
+Every sibling read resolves the exact `bennett-isa-spec` commit in `gate.toml`,
+through `BENNETT_GATE_LAYOUT` or `.tmp/gate/cache`. Building a live sibling does
+not prepare these tests. From the main circuits checkout, materialise/build the
+pin with the pinned gate tool (verification only):
 
 ```sh
-cargo test --offline
+tool_sha=$(sed -n 's/^tool_sha = "\([0-9a-f]*\)"$/\1/p' gate.toml)
+mkdir -p .tmp/gate/tool
+git -C ../bennett show "$tool_sha:tools/gate_run.py" > ".tmp/gate/tool/gate_run-$tool_sha.py"
+python3 ".tmp/gate/tool/gate_run-$tool_sha.py" verify --repo "$PWD" --sha HEAD
+```
+
+A worktree whose gate cache is a symlink must run verification against the main
+checkout with `--sha <worktree commit>`, rather than `--repo <worktree>`, because
+the gate sandbox cannot follow that cache symlink. Tests invoke the reference
+interpreter only through its published CLI; no sibling code is imported.
+
+External syntax checks require LLVM 18 (`llvm-as-18`, `opt-18`) and `uv`.
+Warm the pinned Python parser packages once:
+
+```sh
+uv run --no-project --with 'openqasm3[parser]==1.0.1' --with 'quil==0.37.3' \
+  --with 'antlr4-python3-runtime==4.13.2' --with 'numpy==2.5.4' -- python3 -c pass
+```
+
+Tests use those parsers offline and fail if validators are missing. Python with
+`tomllib` is also required by the pin resolver and quality checks.
+
+## Local verification
+
+Run headless with project-local artifacts:
+
+```sh
+unset DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS BROWSER
+export TMPDIR="$PWD/.tmp/local/tmp"
+export CARGO_TARGET_DIR="$PWD/.tmp/local/target"
+mkdir -p "$TMPDIR"
+cargo test --offline -j3 -- --test-threads=4
 cargo fmt --check
-cargo clippy --offline --all-targets -- -D warnings
+cargo clippy --offline -j3 --all-targets -- -D warnings
+python3 -I scripts/quality_metrics.py
 ```
 
-The differential tests require the already-built sibling
-`bennett-isa-spec/reference-interpreter/target/debug/bennett-isa-ref` and its
-published spec/fixtures. The reference is invoked only through its CLI.
+The default test run excludes two large oracle tests. The local push gate runs
+`cargo test --offline -j3 --test oracles -- --ignored --test-threads=1` separately;
+allow approximately 7 GB peak memory. Symbolic whole-object loop validation is
+retained as an explicitly ignored promised test naming its contract bead.
+`scripts/run-conformance` runs the pinned published conformance harness; staged
+unavailable probes are reported, not counted as passes.
 
-Commands: `check <object>`, `hash <object>`,
-`export-qasm <object> <region> [--budget B[,heap,stack,depth]] [--arg value]...`.
-Oracle export requires a fixed budget. Classical arguments are positional
-(`--arg 3`, `--arg f64:0.5`, `--arg token:10,0,0,0`). The library APIs are
-`oracle::specialise` and `lower::lower_program_with_args`.
+## Interfaces
 
-`run-oracle` executes the compiled circuit on basis inputs (`--input`,
-`--budget`, `--arg`, `--mem`). `run-action` supports all exported gate
-families on basis input (`--basis` or `--mut`/`--in`/`--mem`), including
-`--arg` and `--adjoint`. Its sparse amplitudes are exact symbolic values;
-JSON displays binary64 values. Action `reverse` composes the circuit with
-its adjoint and checks exact restoration including phase. These are
-execution diagnostics, not numerical/channel certificates. Oracle basis
-execution has a Boolean fast path; explicit small budgets avoid large
-literal circuit materialisation.
+`check` and `hash` validate object/proof obligations before reporting identity.
+Unresolved imports report pending obligations. `link` resolves and validates a
+closure registry. `certificate` emits certificate JSON; `certify-object` attaches
+it to an object. Draft metadata requires the explicit version flag above.
 
-M2 construction and specialisation are implemented. The remaining general
-proof obligations have explicit decision beads rather than another milestone
-deferral; see [the disposition note](docs/design/2026-10-30-m2-open-proofs.md).
-pk3/pk3.2 are closed by the requested disposition process, not as a complete
-static-checker claim. Unsupported proofs still fail loudly naming their bead.
+`export-{qasm,qir,quil} <object> <region> [--arg value]...` emits executable
+circuits. Oracle regions additionally require `--budget B[,heap,stack,depth]`.
+Classical arguments are positional integers, `f64:value`, or
+`token:B,heap,stack,depth`. `place`, `place-frame` and `place-qasm` add a target
+JSON argument; `check-target` validates and hashes canonical target bytes.
 
-M3 placement validates before clean workspace reuse. `placement::place_on_target`
-places a hierarchical action; `placement::place_oracle_on_target` additionally
-takes its fixed budget. Interfaces, dirty source borrows and local regions
-remain dedicated. Concrete classes resolve against target capacities; native
-gates, non-nesting schemes, scheme ancillae and QRAM capability drive exact
-sequential resource accounting. The target's expressions supply every cost.
+`run-action`, `run-oracle`, `run-cc`, `reverse`, `step-check` and `run-program`
+provide execution diagnostics. Exact sparse action amplitudes are displayed as
+binary64 JSON; classical quantum diagnostics use binary64 arithmetic. Diagnostics
+are not numerical/channel certificates. Scheduled execution, context-complete
+replay, heterogeneous frame interchange and version adoption remain required
+work, with clause-specific dependencies recorded in Beads.
 
-`check-target <target.json>` validates canonical target bytes and prints its
-hash. `place <object> <region> <target.json> [--budget ...] [--arg ...]`
-prints placement metadata; `place-qasm` with those arguments emits executable
-placed QASM with the source hierarchy/certificate, bindings, specialisation
-request, logical map, timing, resources and obligations attached. This does
-not issue a new §12 certificate. QIR/Quil remain M5. The IR comment format is
-now `bc-ir-2`, which preserves own versus effective controls.
-
-Supplied schedules refuse with **b-isa-spec-8r4** until the bound library is
-published; frame interchange stays **4fa**. Default placement is exact.
-Topology/routing input needs its missing §8 schema (**b4k**); `eps_decade`
-indices need their missing definition (**v44**). Both errors name their bead.
-See the latest PLAN/PROGRESS sections for publication boundaries.
-
-`check` validates schemas, widths, cleanup windows, matched invocation
-multiplicities, translation-lemma borrow frames and the documented incoming
-certificate subset in addition to identity. General symbolic/opaque workspace
-proofs and broader certificate replay retain explicit named errors. See
-HANDOFF.md and docs/PROGRESS.md for exact coverage.
-
-Harnesses (counts as recorded at the M3 acceptance in docs/PROGRESS.md; the full gate is currently
-being restored on re-imported fixtures, bead p8s): Small oracle interfaces (<=10 bits) are
-exhaustive; wider oracle interfaces use four explicit full-tuple patterns.
-These tests are evidence, not certificates. `scripts/run-conformance` uses the published harness with all artifacts
-confined to this repo. Select `--suite A`, `--suite B`, or `--suite F` (default).
-Latest: A 21/0/0, B 35/0/0, F 33/0/2 (pass/fail/unavailable); F exits 2
-because its linking and frame-descriptor probes are unavailable.
-
-`run-cc <object> <entry> [--args ...] [--entropy hex] [--draws ...]
-[--replies file]` runs the independent CC/R diagnostic machine. `reverse`
-executes and reverses its recorded deltas, refusing measured runs. For oracle
-entries, `reverse` accepts `--input`, `--budget`, optional `--steps`, and the
-run-oracle arguments, and verifies compiled prefix restoration. `step-check`
-compares supported direct row semantics against the circuit on the exhaustive
-<=16-bit free input/memory domain. Unsupported direct rows and large-domain
-sampling fail explicitly. These diagnostic commands are not certificate
-claims; CC/R quantum diagnostic amplitudes use binary64 arithmetic.
-
-Proof output uses published draft metadata only with explicit opt-in:
-
-```sh
-bennett-circuits certificate input.bisa region --isa 0.9-draft --target target.json --dialect-mapping-version YOUR_MAPPING_VERSION
-bennett-circuits certify-object input.bisa region --isa 0.9-draft --target target.json --dialect-mapping-version YOUR_MAPPING_VERSION
-bennett-circuits check certified.bisa --isa 0.9-draft
-bennett-circuits link root.bisa library.bisa other-library.bisa
-bennett-circuits place-frame input.bisa region target.json --isa 0.9-draft
-bennett-circuits coverage input.bisa --source-map source-map.json
-```
-
-`certificate` prints §12 JSON; `certify-object` prints the object with its
-certificate. Parameters use the existing `--arg` and oracle `--budget` options.
-`link` emits a resolved, validated, rebound object; draft libraries require the
-same explicit `--isa` opt-in. Unlinked `check`/`hash` report `proof_status:
-"pending"` with `pending_obligations`. `place` and `place-qasm` attach typed
-frames when opted into the draft. The coverage source map maps JCS
-program-point arrays to real dialect stable IDs; absent mappings refuse.
-Reference certificates prove their reference relation, not a scheduled target
-realisation. See `docs/PLAN.md` for the still-required M4 breadth and the
-`b-isa-spec-8r4` library gate.
+Library entry points live in `lower`, `oracle`, `placement`, `certificate`,
+`linking`, `qasm`, `qir` and `quil`. See [docs/PLAN.md](docs/PLAN.md) for design
+context and dated design/review documents for historical evidence.
