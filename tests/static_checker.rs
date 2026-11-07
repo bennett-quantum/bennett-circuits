@@ -1023,7 +1023,7 @@ fn concrete_cfg_and_unlinked_workspace_refusals_also_name_decisions() {
 
 #[test]
 #[ignore = "promised: bennett-circuits-6kc requires symbolic loop object binding contract"]
-fn promised_symbolic_loop_objects_validate_before_specialisation() {
+fn promised_6kc_symbolic_loop_objects_validate_before_specialisation() {
     let body = "perm_action @a (t:wire mut) () () (n:i8) ()\nregs { } bounds {3}\n^entry():\nqloop n {\nx t\n}\n";
     assert_eq!(generated(body).hash().unwrap().proof_status, "proved");
 }

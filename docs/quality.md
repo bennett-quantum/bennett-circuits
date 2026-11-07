@@ -1,5 +1,9 @@
 # Quality evidence
 
+Final default verification: **210 Rust tests passed**, three explicitly ignored
+(two slow oracle tests and one contract-dependent promised test), **17.22 s**
+wall time. Source line coverage: **85.15%**. The commands and limits are below.
+
 ## Contract audit
 
 All source contracts were read through `scripts/pinned_sibling.py` at
@@ -22,8 +26,8 @@ Further measurements and the quality baseline are recorded below as completed.
 
 `CARGO_TARGET_DIR=.tmp/quality-circuits/target /usr/bin/time -f
 "wall_seconds=%e peak_kb=%M" timeout 180 cargo test --offline -j3 --
---test-threads=4` passed in **22.00 s**, peak **128280 KiB**, after a separate
-cold build (141 s). Test profile keeps optimisation, assertions and overflow
+--test-threads=4` passed in **17.22 s**, peak **128308 KiB**, with existing
+build artifacts. Test profile keeps optimisation, assertions and overflow
 checks, with line-table debug information. Two integration binaries replace
 15 independently linked binaries. Two large oracle tests are explicitly
 ignored in the default run; `gate.toml` runs them with `--ignored` and one
@@ -33,8 +37,8 @@ not a reduced semantic domain. The symbolic-object promised test is separate.
 ## Coverage
 
 `CARGO_TARGET_DIR=.tmp/quality-circuits/target timeout 900 cargo llvm-cov
---offline -j3 --summary-only -- --test-threads=4` passed: **85.08% lines**
-(18,021 lines, 2,689 missed), **77.20% functions**, **81.66% regions**.
+--offline -j3 --summary-only -- --test-threads=4` passed: **85.15% lines**
+(18,565 lines, 2,757 missed), **77.83% functions**, **82.03% regions**.
 Siblings used the gate pin. This default-suite measurement excludes the two
 ignored large oracle tests and the explicitly promised symbolic-object test.
 It includes all maintained default test binaries; there is no coverage threshold.
@@ -43,10 +47,10 @@ The five lowest line figures and remaining work are:
 
 | Module | Lines | Reason for remaining uncovered paths |
 |---|---:|---|
-| main.rs | 65.29% | CLI malformed-option combinations and schedule/target-launch paths exceed the current diagnostic command corpus; executable schedule adoption has an explicit library dependency. |
-| linking.rs | 72.75% | Transitive conflict, certificate-DAG and malformed closure combinations remain beyond the existing linked-program replay witnesses. |
+| main.rs | 60.06% | CLI malformed-option combinations and schedule/target-launch paths exceed the current diagnostic command corpus; executable schedule adoption has an explicit library dependency. |
+| linking.rs | 73.55% | Transitive conflict, certificate-DAG and malformed closure combinations remain beyond the existing linked-program replay witnesses. |
 | ir.rs | 72.79% | IR construction errors and malformed geometry are incompletely enumerated; exporter/differential suites exercise valid circuits exhaustively over their basis domains. |
-| step_check.rs | 73.61% | Direct diagnostic row/error variants exceed the small-width row corpus; large-domain diagnostics remain evidence, with explicit errors. |
+| step_check.rs | 72.25% | Direct diagnostic row/error variants exceed the small-width row corpus; large-domain diagnostics remain evidence, with explicit errors. |
 | target.rs | 76.77% | Malformed expression/template combinations and version-adoption branches are not all exercised; exact resource and placement witnesses cover valid native/scheme/QRAM paths. |
 
 ## Assertion and oracle audit
@@ -233,3 +237,31 @@ Ratchet verification: all four self-tests passed. A temporary Git fixture also
 rejected an actual added branch (complexity 79 > 78), a source process identifier
 (1 > 0), and a newly tracked `trace.log`; the clean fixture passed. The three
 pin/ratchet integration tests passed in 1.57 s. Baseline check passes on this tree.
+
+## Final audit
+
+The completed default command passed 31 library tests, 176 integration tests
+and three small oracle/support tests; one promised and two slow tests were
+explicitly ignored. The parser/ratchet subprocess tests are included. Running
+`timeout 180 cargo test --offline -j3 --test integration promised_6kc_ --
+--ignored` selects exactly one test and remains red with §16.1/§5.3, as required
+until the symbolic object-binding contract is clarified. Its named switch is
+also in the README. The two large oracle tests were retained with their full
+semantic domains and are assigned to the orchestrator's separate gate run;
+this child did not run the full push or any consumer gate.
+
+Final `cargo fmt --check`, `timeout 180 cargo clippy --offline -j3 --all-targets
+-- -D warnings`, `python3 -I scripts/quality_metrics.py`, its four self-tests,
+and `git diff --check` all pass. Code written in this change uses named phases,
+explicit errors, hand-derived/independent test expectations, one owner for the
+history state, and no process labels in product output. No sibling code was
+imported; all sibling test inputs resolve the gate pin. The remaining long-function
+owner and out-of-scope backup are recorded above, rather than claimed complete.
+
+The four staged F manifests were re-read at the pin. In particular,
+`F-link-conflict` still says there is no CLI link command; current `link` is
+implemented. Updating that published probe is an upstream task under
+`bennett-circuits-46t`; the job's ignored cross-repo request is queued for the
+orchestrator. Existing contract/version/breadth tasks stay open with exact
+clause/next-step notes. `bennett-circuits-56n` is closed by the completed pin
+instructions, handoff retirement and measured quality check.

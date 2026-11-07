@@ -60,7 +60,9 @@ python3 -I scripts/quality_metrics.py
 The default test run excludes two large oracle tests. The local push gate runs
 `cargo test --offline -j3 --test oracles -- --ignored --test-threads=1` separately;
 allow approximately 7 GB peak memory. Symbolic whole-object loop validation is
-retained as an explicitly ignored promised test naming its contract bead.
+retained as an explicitly ignored promised test. Run its currently red witness
+with `cargo test --offline -j3 --test integration promised_6kc_ -- --ignored`
+(contract bead `bennett-circuits-6kc`).
 `scripts/run-conformance` runs the pinned published conformance harness; staged
 unavailable probes are reported, not counted as passes.
 
