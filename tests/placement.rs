@@ -1,12 +1,7 @@
-#[path = "support/exact.rs"]
-mod exact;
-#[path = "support/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-#[path = "support/sibling.rs"]
-mod sibling;
-#[path = "support/sim.rs"]
-mod sim;
+use super::exact;
+use super::fixtures;
+use super::sibling;
+use super::sim;
 use bennett_circuits::{
     flatten::{Flat, flatten},
     json::Value,

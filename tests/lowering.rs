@@ -2,11 +2,8 @@
 //! hierarchy preserved, every §4 Q row implemented or failing with
 //! `unimplemented: <row> (milestone N)`.
 
-#[path = "support/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-#[path = "support/sibling.rs"]
-mod sibling;
+use super::fixtures;
+use super::sibling;
 use std::path::PathBuf;
 
 use bennett_circuits::flatten::flatten;

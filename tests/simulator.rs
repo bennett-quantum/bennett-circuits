@@ -1,7 +1,5 @@
-#[path = "support/exact.rs"]
-mod exact;
-#[path = "support/sim.rs"]
-mod sim;
+use super::exact;
+use super::sim;
 use bennett_circuits::{
     flatten::{Flat, FlatGate},
     ir::BaseGate as G,

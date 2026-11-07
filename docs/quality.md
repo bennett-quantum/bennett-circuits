@@ -63,3 +63,26 @@ passed 183 tests (one promised ignored) in 29.91 s. Specification examples are
 discovered from the pinned text without a fixed count; a three-example witness
 checks discovery. Expected borrow widths and tuple scope come from the source
 signatures/lifetimes, not captured output.
+
+## Named evaluation phases
+
+The symbolic-history evaluator now has explicit state initialisation, instruction
+family handlers and exit validation. `evaluate_body` shrank from 1,157 to
+125 lines; the longest new handler is invocation replay (280 lines).
+Sixteen unit witnesses cover preparation, initialisation, each instruction family
+and exit checks. Placement class assignment is a separate peak-liveness phase
+with a hand-derived overlapping/nonoverlapping capacity witness.
+`timeout 900 cargo test --offline -j3 --lib --test integration -- --test-threads=4`
+passed 31 unit tests and 173 integration tests (one promised ignored), in
+0.01 s and 20.34 s. Shared integration support is compiled once; duplicate
+helper test copies account for the reduced integration count.
+`timeout 180 cargo clippy --offline -j3 --all-targets -- -D warnings` passed.
+Seventy CLI status/stdout/stderr triplets (all pinned fixture hashes and action
+QASM/QIR/Quil exports, including failures) were byte-identical before/after.
+The exhaustive pinned reference action differential also passed.
+
+Remaining semantic functions over 300 lines have owner **circuits implementation
+stream**, tracked as `bennett-circuits-so2`: `classical::execute` (538), checker
+`schema` (329), `static_parameter_action` (306), `classical_schema` (481), oracle
+`row` (461) and `specialise_impl` (364). They need opcode/transfer/build phases
+with independent witnesses; this checkpoint does not claim those splits done.

@@ -1,5 +1,4 @@
-#[path = "support/sibling.rs"]
-mod sibling;
+use super::sibling;
 use bennett_circuits::{json::Value, object::Object};
 use std::{path::Path, process::Command};
 #[test]

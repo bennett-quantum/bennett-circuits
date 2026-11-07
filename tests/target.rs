@@ -1,15 +1,7 @@
-#[path = "support/exact.rs"]
-#[allow(dead_code)]
-mod exact;
-#[path = "support/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-#[path = "support/sibling.rs"]
-mod sibling;
-#[path = "support/sim.rs"]
-mod sim;
-#[path = "support/target.rs"]
-mod targets;
+use super::fixtures;
+use super::sibling;
+use super::sim;
+use super::test_target as targets;
 use bennett_circuits::{
     object::Object,
     placement::place_on_target,

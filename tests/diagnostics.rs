@@ -1,6 +1,5 @@
 //! Published acceptance probes, read only; no implementation imports.
-#[path = "support/sibling.rs"]
-mod sibling;
+use super::sibling;
 use bennett_circuits::json::Value;
 use std::process::Command;
 fn contains(actual: &Value, expected: &Value) -> bool {

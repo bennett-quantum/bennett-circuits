@@ -1,11 +1,6 @@
 //! Executable-text validation of QIR and Quil, independent of the IR comments.
-#[path = "support/exact.rs"]
-#[allow(dead_code)]
-mod exact;
-#[path = "support/sibling.rs"]
-mod sibling;
-#[path = "support/sim.rs"]
-mod sim;
+use super::sibling;
+use super::sim;
 use bennett_circuits::{flatten::flatten, ir::*, qir, quil};
 fn program() -> Program {
     let q = |i| QubitRef::new("q", i);

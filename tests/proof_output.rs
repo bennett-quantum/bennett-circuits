@@ -1,5 +1,4 @@
-#[path = "support/sibling.rs"]
-mod sibling;
+use super::sibling;
 use bennett_circuits::{
     json::Value,
     linking::Registry,
@@ -117,8 +116,7 @@ fn legacy_certificate_checks_unreferenced_claims_and_structural_witnesses() {
         }
     }
 }
-#[path = "support/target.rs"]
-mod targets;
+use super::test_target as targets;
 fn target() -> bennett_circuits::target::Target {
     targets::universal(false, false)
 }
