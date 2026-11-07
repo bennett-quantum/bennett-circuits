@@ -1,7 +1,7 @@
 # Quality evidence
 
 Final default verification: **210 Rust tests passed**, three explicitly ignored
-(two slow oracle tests and one contract-dependent promised test), **17.22 s**
+(two slow oracle tests and one contract-dependent promised test), **8.22 s**
 wall time. Source line coverage: **85.15%**. The commands and limits are below.
 
 ## Contract audit
@@ -25,8 +25,8 @@ Further measurements and the quality baseline are recorded below as completed.
 ## Default test budget
 
 `CARGO_TARGET_DIR=.tmp/quality-circuits/target /usr/bin/time -f
-"wall_seconds=%e peak_kb=%M" timeout 180 cargo test --offline -j3 --
---test-threads=4` passed in **17.22 s**, peak **128308 KiB**, with existing
+"wall_seconds=%e peak_kb=%M" timeout 900 cargo test -j3 --
+--test-threads=4` passed in **8.22 s**, peak **127272 KiB**, with existing
 build artifacts. Test profile keeps optimisation, assertions and overflow
 checks, with line-table debug information. Two integration binaries replace
 15 independently linked binaries. Two large oracle tests are explicitly
@@ -143,6 +143,24 @@ process identifiers or newly tracked litter paths. Useful short functions can
 be added. No universal numeric limit or coverage threshold is introduced;
 explicit baseline changes require reviewing the new measurement.
 
+Signature scanning now balances parentheses, brackets, angle brackets and const
+expression braces before treating a semicolon as a declaration terminator;
+return arrows are distinct from closing angle brackets. The original measurement
+omitted three existing array-signature functions: `sha256::sha256` (68 lines,
+complexity mass 9) and `certificate::obj` / `classical::obj` (three lines and one
+forwarding wrapper each). The corrected baseline therefore changes the short
+function count from 400 to 402, the 31–100-line count from 131 to 132, the
+`src/sha256.rs` maximum from 15 to 68 and complexity mass from 1 to 10, and the
+wrapper count from 102 to 104. These are newly measured existing functions;
+the ratchet comparisons are unchanged.
+
+An inventory-level regression adds 320 conditional lines to the real `sha256`
+function in memory. It failed before the scanner correction because
+`regressions()` returned an empty list; it now rejects both length-bucket and
+complexity growth. Seven paired signature/declaration cases cover arrays in
+arguments, returns, generic bounds, function pointers and const expressions,
+while keeping trait declarations excluded. Malformed signatures fail explicitly.
+
 Corresponding hygiene greps are `rg -n
 "bennett-circuits-[a-z0-9]{3}\b|b-isa-spec-[a-z0-9]{3}\b|milestone[ -][0-9]+"
 src` (zero matches) and `git ls-files | rg
@@ -180,16 +198,16 @@ job/shift/round labels and session dates. This is the repo's own baseline.
     "src/qir.rs": 166,
     "src/quil.rs": 43,
     "src/selectors.rs": 61,
-    "src/sha256.rs": 1,
+    "src/sha256.rs": 10,
     "src/simulation.rs": 94,
     "src/step_check.rs": 239,
     "src/target.rs": 438,
     "src/translation.rs": 111
   },
   "length_distribution": {
-    "1-30": 400,
+    "1-30": 402,
     "101-300": 41,
-    "31-100": 131,
+    "31-100": 132,
     "over-300": 6
   },
   "longest_per_file": {
@@ -219,7 +237,7 @@ job/shift/round labels and session dates. This is the repo's own baseline.
     "src/qir.rs": 230,
     "src/quil.rs": 74,
     "src/selectors.rs": 56,
-    "src/sha256.rs": 15,
+    "src/sha256.rs": 68,
     "src/simulation.rs": 70,
     "src/step_check.rs": 260,
     "src/target.rs": 268,
@@ -229,11 +247,15 @@ job/shift/round labels and session dates. This is the repo's own baseline.
   "tracked_litter": [
     ".beads/hooks/pre-push.backup"
   ],
-  "trivial_wrappers": 102
+  "trivial_wrappers": 104
 }
 ```
 
-Ratchet verification: all four self-tests passed. A temporary Git fixture also
+Ratchet verification: `timeout 30 python3 -I scripts/quality_metrics.py
+--self-test` passed all seven tests, and `timeout 30 python3 -I
+scripts/quality_metrics.py` passed the corrected baseline. A direct comparison
+also confirmed that the recorded JSON equals the corrected inventory in every
+dimension. A temporary Git fixture from the initial verification also
 rejected an actual added branch (complexity 79 > 78), a source process identifier
 (1 > 0), and a newly tracked `trace.log`; the clean fixture passed. The three
 pin/ratchet integration tests passed in 1.57 s. Baseline check passes on this tree.
@@ -251,7 +273,7 @@ semantic domains and are assigned to the orchestrator's separate gate run;
 this child did not run the full push or any consumer gate.
 
 Final `cargo fmt --check`, `timeout 180 cargo clippy --offline -j3 --all-targets
--- -D warnings`, `python3 -I scripts/quality_metrics.py`, its four self-tests,
+-- -D warnings`, `python3 -I scripts/quality_metrics.py`, its seven self-tests,
 and `git diff --check` all pass. Code written in this change uses named phases,
 explicit errors, hand-derived/independent test expectations, one owner for the
 history state, and no process labels in product output. No sibling code was

@@ -11,13 +11,16 @@ import re
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 MARKER = '<!-- quality-baseline -->'
 PROCESS = re.compile(r'\bbennett-circuits-[a-z0-9]{3}(?:\.[0-9]+)?\b|\bb-isa-spec-[a-z0-9]{3}\b|\b(?:milestone|shift|round|job)[ -][0-9]+\b|\bM[1-9]\b|\bquality-[a-z]+\b|\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b', re.I)
 LITTER = re.compile(r'(^|/)(__pycache__|PROGRESS[^/]*|LAST.RUN[^/]*|LOCK)(/|$)|\.(pyc|log|darc|backup|lock)$')
 TOKEN = re.compile(r'\br(?P<hash>\#*)".*?"(?P=hash)|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])\'|//[^\n]*|/\*.*?\*/', re.S)
-FUNCTION = re.compile(r'\bfn\s+([A-Za-z_][A-Za-z_0-9]*)\s*(?:<[^;{}]*>)?\s*\(')
+FUNCTION = re.compile(r'\bfn\s+([A-Za-z_][A-Za-z_0-9]*)\s*(?=[<(])')
+SIGNATURE = re.compile(r'->|[()[\]<>{};]')  # A return arrow does not close a generic.
+CLOSING = {')': '(', ']': '[', '>': '<', '}': '{'}
 BRANCH = re.compile(r'\b(if|else|match|for|while|loop)\b|&&|\|\||\{|\}')
 
 
@@ -29,9 +32,23 @@ def mask(text):
 def functions(text):
     clean = mask(text)
     for match in FUNCTION.finditer(clean):
-        start = clean.find('{', match.end())
-        semi = clean.find(';', match.end())
-        if start < 0 or (semi >= 0 and semi < start):
+        delimiters = []
+        for token in SIGNATURE.finditer(clean, match.end()):
+            word = token[0]
+            if word == '{' and not delimiters:
+                start = token.start()
+                break
+            if word == ';' and not delimiters:
+                start = None
+                break
+            if word in '([<{':
+                delimiters.append(word)
+            elif word in CLOSING:
+                if not delimiters or delimiters.pop() != CLOSING[word]:
+                    raise ValueError(f'unbalanced signature for function {match[1]}')
+        else:
+            raise ValueError(f'unterminated signature for function {match[1]}')
+        if start is None:
             continue  # Trait declaration, not a body.
         depth, end = 1, start + 1
         while depth and end < len(clean):
@@ -106,6 +123,45 @@ class MetricsTests(unittest.TestCase):
     def test_wrapper_and_trait_declaration(self):
         self.assertEqual(list(functions('fn abstracted(); fn forward(x: u8) { other(x) }')),
                          [('forward', 1, 0, 1)])
+
+    def test_signature_delimiters_distinguish_bodies_from_declarations(self):
+        signatures = [
+            'fn typed(input: [u8; 4]) -> ([u8; 32], [u16; 2])',
+            'fn typed() -> Option<[u8; 32]>',
+            'fn typed<T: Into<[u8; 32]>>(input: T) -> [u8; 32]',
+            'fn typed<T>(input: T) -> [u8; 32] where T: Into<[u8; 32]>',
+            'fn typed(input: fn() -> [u8; 32]) -> [u8; 32]',
+            'fn typed<T: Fn() -> [u8; 32]>(input: T) -> [u8; 32]',
+            'fn typed() -> [u8; { let n = 4; n }]',
+        ]
+        for signature in signatures:
+            with self.subTest(signature=signature, kind='body'):
+                self.assertEqual(list(functions(signature + ' {\n if ready { work(); }\n}')),
+                                 [('typed', 3, 1, 0)])
+            with self.subTest(signature=signature, kind='declaration'):
+                trait = 'trait Hash { ' + signature + '; fn forward() { other() } }'
+                self.assertEqual(list(functions(trait)), [('forward', 1, 0, 1)])
+
+    def test_malformed_signatures_fail_loudly(self):
+        for source in ['fn broken(x: [u8; 4) {}', 'fn broken(x: [u8; 4]']:
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(ValueError, 'signature.*broken'):
+                    list(functions(source))
+
+    def test_sha256_growth_is_rejected_by_inventory(self):
+        path = ROOT / 'src/sha256.rs'
+        read_text = Path.read_text
+        source = read_text(path)
+        insertion = '    let mut h:'
+        self.assertIn(insertion, source)
+        mutated = source.replace(insertion, '    if data.is_empty() {}\n' * 320 + insertion, 1)
+        baseline = inventory(ROOT)
+        with patch.object(Path, 'read_text', lambda p: mutated if p == path else read_text(p)):
+            current = inventory(ROOT)
+        errors = regressions(current, baseline)
+        self.assertTrue(errors, 'growth in the existing sha256 function must fail the ratchet')
+        self.assertIn('function length bucket over-300 increased', errors)
+        self.assertTrue(any('complexity_mass_per_file: src/sha256.rs:' in e for e in errors))
 
     def test_process_identifiers_exclude_published_format_names(self):
         self.assertFalse(PROCESS.search("bennett-circuits-placement-1"))
