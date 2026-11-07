@@ -190,9 +190,7 @@ pub(crate) fn verify(
                         && (expected.get("table").is_some()
                             || expected.get("program").and_then(Value::as_str).is_some()))
                 {
-                    bail!(
-                        "unimplemented: §12 borrow expected-table/external-program replay; decision bennett-circuits-4pf (milestone 2)"
-                    );
+                    bail!("unimplemented: §12 borrow expected-table/external-program replay");
                 }
                 // Object::check/hash replay every draft table/program relation
                 // through certificate::verify after structural validation.
@@ -206,12 +204,10 @@ pub(crate) fn verify(
             Some("structural") => {
                 if claim.get("rule").and_then(Value::as_str) == Some("inverse_pair_library") {
                     bail!(
-                        "unimplemented: §12 borrow inverse-pair library replay; unpublished reference library b-isa-spec-8r4; decision bennett-circuits-4pf (milestone 2)"
+                        "unimplemented: §12 borrow inverse-pair library replay; reference expansion library (§11.1)"
                     )
                 }
-                bail!(
-                    "unimplemented: §12 borrow library/structural claim replay; decision bennett-circuits-4pf (milestone 2)"
-                )
+                bail!("unimplemented: §12 borrow library/structural claim replay")
             }
             _ => return Err(error("borrow verification must reference a T3 proof")),
         }

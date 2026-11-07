@@ -1,5 +1,5 @@
 # Spec versions this repo implements. Contract = the published specs, nothing else.
-status = "milestone-1"
+status = "partial"
 isa = "0.8"
 object = "0.8"
 launch = "0.8"
@@ -7,3 +7,6 @@ sched = "0.8"
 cert = "0.8"
 coverage = "0.8"
 target = "0.8"
+
+# Typed frame/claim metadata requires explicit --isa 0.9-draft opt-in.
+# Source objects and target descriptions continue to use the 0.8 contract.

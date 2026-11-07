@@ -204,7 +204,7 @@ impl<'a> Machine<'a> {
                     self.object.header.ptr_width,
                 ))
             }
-            _ => bail!("unimplemented: CC operand {o:?} (milestone 2)"),
+            _ => bail!("unimplemented: CC operand {o:?}"),
         }
     }
     fn n(&self, a: usize, o: &Operand) -> Result<u128> {
@@ -693,9 +693,7 @@ impl<'a> Machine<'a> {
                         let cf = self
                             .object
                             .function(name)
-                            .ok_or_else(|| {
-                                Error("unimplemented: CC imported body (milestone 2)".into())
-                            })?
+                            .ok_or_else(|| Error("unimplemented: CC imported body".into()))?
                             .clone();
                         let args = os[1..]
                             .iter()
@@ -969,7 +967,7 @@ impl<'a> Machine<'a> {
                         self.state.handles.remove(&q);
                         Some(V::Int(value, h.wires.len() as u32))
                     }
-                    _ => bail!("unimplemented: CC/R diagnostic {op} (milestone 2)"),
+                    _ => bail!("unimplemented: CC/R diagnostic {op}"),
                 }
             };
             if let Some(v) = result {
@@ -1047,7 +1045,7 @@ fn run_inner(
                     .ok_or_else(|| Error("CC: reply array".into()))?
                     .to_vec()
             }
-            _ => bail!("unimplemented: CC diagnostic option {k} (milestone 2)"),
+            _ => bail!("unimplemented: CC diagnostic option {k}"),
         }
     }
     if inputs.len() != f.groups[0].len() {
@@ -1060,7 +1058,7 @@ fn run_inner(
             let w = match p.ty {
                 Type::Int(w) => w,
                 Type::Ptr => object.header.ptr_width,
-                _ => bail!("unimplemented: CC entry argument type (milestone 2)"),
+                _ => bail!("unimplemented: CC entry argument type"),
             };
             let n = s
                 .parse::<u128>()

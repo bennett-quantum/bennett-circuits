@@ -151,7 +151,7 @@ fn claim_invocation(o: &Object, f: &Function, claim: &V) -> Result<(Vec<Argument
 fn program(o: &Object, f: &Function, args: &[Argument], b: Budget) -> Result<Program> {
     if o.schedule.is_some() {
         bail!(
-            "E_SCHEDULE_INFEASIBLE: certificate realised operation needs expansion library b-isa-spec-8r4"
+            "E_SCHEDULE_INFEASIBLE: certificate realised operation needs expansion library (§11.1)"
         )
     }
     if f.kind == FnKind::Oracle {
@@ -246,7 +246,7 @@ fn direct_inverse_pairs(f: &Function, args: &[Argument]) -> Result<Vec<(String, 
                     bail!("certificate: qinplace schema (§4.5)")
                 };
                 let Some(Argument::Token(b)) = env.get(token) else {
-                    bail!("certificate: unresolved qinplace token; bennett-circuits-4pf (§12.3)")
+                    bail!("certificate: unresolved qinplace token (§12.3)")
                 };
                 let value = (g.clone(), gi.clone(), *b);
                 if !out.contains(&value) {
@@ -419,7 +419,7 @@ impl Space {
         for g in &self.flat.gates {
             if !matches!(g.gate, BaseGate::X | BaseGate::Swap) {
                 bail!(
-                    "E_SCHEDULE_INFEASIBLE: non-permutation table assertion needs numerical/channel proof and expansion library b-isa-spec-8r4 (§12.1)"
+                    "E_SCHEDULE_INFEASIBLE: non-permutation table assertion needs numerical/channel proof and expansion library (§11.1) (§12.1)"
                 )
             }
             if g.controls.iter().all(|(q, p)| bits[*q] == *p) {
@@ -612,12 +612,12 @@ fn generate_relation(
         bail!("certificate: explicit --isa 0.9-draft required (§12 K13)")
     }
     if !o.imports.is_empty() {
-        bail!("certificate: obligations pending; link before proving (§9.3; bennett-circuits-z9r)")
+        bail!("certificate: obligations pending; link before proving (§9.3)")
     }
     let f = o.function(name).ok_or("certificate: unknown subject")?;
     if let Some(owner) = nested_inverse_owner(o, f) {
         bail!(
-            "unimplemented: nested qinplace owner @{owner} certificate/context composition; bennett-circuits-4pf (ISA question bennett-circuits-9su; §12.3)"
+            "unimplemented: nested qinplace owner @{owner} certificate/context composition (§12.3)"
         )
     }
 
@@ -1103,7 +1103,7 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                     }
                     if let Some(owner) = nested_inverse_owner(o, f) {
                         bail!(
-                            "unimplemented: nested qinplace owner @{owner} proof/context replay; bennett-circuits-4pf (§12.3)"
+                            "unimplemented: nested qinplace owner @{owner} proof/context replay (§12.3)"
                         )
                     }
                     let (args, b) = claim_invocation(o, f, claim)?;
@@ -1113,13 +1113,11 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                             || get(subject, "variant")?.as_str() != Some("forward")
                             || get(subject, "inherited_controls")?.as_u64() != Some(0)
                         {
-                            bail!(
-                                "certificate: subject binding unsupported/mismatch; bennett-circuits-4pf (§12.1)"
-                            )
+                            bail!("certificate: subject binding unsupported/mismatch (§12.1)")
                         }
                         if subject.get("schedule_hash").is_some() {
                             bail!(
-                                "E_SCHEDULE_INFEASIBLE: scheduled claim requires expansion library b-isa-spec-8r4"
+                                "E_SCHEDULE_INFEASIBLE: scheduled claim requires expansion library (§11.1)"
                             )
                         }
                     }
@@ -1135,7 +1133,7 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                     }
                     if get(claim, "domain")? != &space.domain() {
                         bail!(
-                            "certificate: domain must equal full D; subset evidence replay pending bennett-circuits-4pf (§12.2)"
+                            "certificate: domain must equal full D; subset evidence replay pending (§12.2)"
                         )
                     }
                     let expected = get(claim, "expected")?;
@@ -1157,9 +1155,7 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                             .iter()
                             .find(|(_, h)| h.closure_hash.as_deref() == Some(hash))
                             .map(|(n, _)| n)
-                            .ok_or(
-                                "certificate: expected closure unresolved; bennett-circuits-4pf",
-                            )?;
+                            .ok_or("certificate: expected closure unresolved")?;
                         let other = o
                             .function(name)
                             .ok_or("certificate: expected closure is not callable")?;
@@ -1184,7 +1180,7 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                         })?;
                     } else {
                         bail!(
-                            "E_SCHEDULE_INFEASIBLE: expected relation requires expansion library b-isa-spec-8r4 (§12.1)"
+                            "E_SCHEDULE_INFEASIBLE: expected relation requires expansion library (§11.1) (§12.1)"
                         )
                     }
                 }
@@ -1202,7 +1198,7 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                         "adjoint_table" => {
                             if let Some(owner) = nested_inverse_owner(o, f) {
                                 bail!(
-                                    "unimplemented: nested qinplace owner @{owner} proof/context replay; bennett-circuits-4pf (§12.3)"
+                                    "unimplemented: nested qinplace owner @{owner} proof/context replay (§12.3)"
                                 )
                             }
                             if !uniform_adjoint(o, f) {
@@ -1210,7 +1206,7 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                                     == &obj([("args", strv("all")), ("budget", strv("all"))])
                                 {
                                     bail!(
-                                        "unimplemented: parameter-uniform qinplace adjoint side conditions; bennett-circuits-4pf (§12.3)"
+                                        "unimplemented: parameter-uniform qinplace adjoint side conditions (§12.3)"
                                     )
                                 }
                                 let (args, b) = resolve_invocation(o, f, invocation)?;
@@ -1230,17 +1226,13 @@ pub(crate) fn verify(o: &Object) -> Result<()> {
                             }
                         }
                         "inverse_pair_library" => {}
-                        _ => bail!(
-                            "unimplemented: structural witness replay; bennett-circuits-4pf (§12.1)"
-                        ),
+                        _ => bail!("unimplemented: structural witness replay (§12.1)"),
                     }
                 }
                 "numerical" | "channel" => bail!(
-                    "E_SCHEDULE_INFEASIBLE: numerical/channel claim requires expansion library b-isa-spec-8r4 (§12.1)"
+                    "E_SCHEDULE_INFEASIBLE: numerical/channel claim requires expansion library (§11.1) (§12.1)"
                 ),
-                _ => bail!(
-                    "unimplemented: sampled replay remains evidence; bennett-circuits-4pf (§12.1)"
-                ),
+                _ => bail!("unimplemented: sampled replay remains evidence (§12.1)"),
             }
         }
         let verification = get(region, "verification")?;

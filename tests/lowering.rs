@@ -155,7 +155,7 @@ fn missing_specialisation_bindings_fail_loudly() {
         ("qinplace @g @ginv tk t\n", "missing qinplace budget token"),
         (
             "rz theta t[0]\n",
-            "unimplemented: rz with non-literal angle (milestone 2)",
+            "unimplemented: rz with non-literal angle",
         ),
     ] {
         let obj = synthetic(body);

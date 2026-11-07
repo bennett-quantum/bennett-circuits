@@ -710,7 +710,7 @@ fn legacy_numerical_claims_cannot_bypass_the_expansion_library_gate() {
     };
     versions.insert("cert".into(), Value::Str("0.8".into()));
     o.certificate = Some(cert);
-    assert!(o.check().unwrap_err().0.contains("b-isa-spec-8r4"));
+    assert!(o.check().unwrap_err().0.contains("expansion library"));
 }
 #[test]
 fn action_frames_preserve_nested_oracle_history_provenance() {
@@ -1145,7 +1145,7 @@ fn nested_qinplace_never_emits_a_packet_missing_its_owner_proof() {
         bennett_circuits::certificate::generate(&o, "root", &args, None, true, &context(&target()))
             .unwrap_err()
             .0
-            .contains("bennett-circuits-4pf")
+            .contains("§12")
     );
 }
 #[test]

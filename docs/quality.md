@@ -104,3 +104,20 @@ Parser prerequisites are cached once with:
 `uv run --no-project --with "openqasm3[parser]==1.0.1" --with "quil==0.37.3"
 --with "antlr4-python3-runtime==4.13.2" --with "numpy==2.5.4" -- python3 -c pass`.
 Tests then use `uv run --offline`; a missing parser/tool fails explicitly.
+
+## Product and repository hygiene
+
+Forty-eight bead identifier occurrences and numeric milestone labels were
+removed from source/comments/diagnostics. Errors retain their construct,
+specification clauses and published `E_` codes; tests assert these stable
+contracts. The published `bennett-circuits-placement-1` format identifier is
+preserved. CLI launch, target checking, placement and export dispatch now have
+separate readable handlers. `SPEC_VERSIONS.toml` says partial 0.8 support plus
+explicit draft metadata, rather than the stale first-milestone status.
+Tracked `docs/PROGRESS.md` is retired; current progress stays ignored in `.tmp`.
+
+The only remaining tracked litter is `.beads/hooks/pre-push.backup`, outside
+this job ownership. Removal is assigned to the orchestrator in
+`bennett-circuits-8n7`; the ratchet records that existing path and rejects any
+additional litter. Ignore rules cover pycache, bytecode, logs, Beads LOCK,
+backups and scratch progress. There are no tracked artifacts added by this job.

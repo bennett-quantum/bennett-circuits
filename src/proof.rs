@@ -1,6 +1,6 @@
 //! Exact basis proofs for small specialised permutation circuits. No sampling
 //! and no floating arithmetic: X/SWAP basis evolution is Boolean. ISA §12
-//! certificate serialization/bindings remain milestone 4.
+//! certificate serialization and binding are provided by `certificate`.
 use crate::{
     Error, Result, bail,
     flatten::{Flat, flatten},
@@ -29,7 +29,7 @@ pub fn basis(flat: &Flat, input: &[bool]) -> Result<Vec<bool>> {
         .iter()
         .any(|g| !matches!(g.gate, BaseGate::X | BaseGate::Swap))
     {
-        bail!("unimplemented: non-permutation CLI state-vector execution (milestone 6)")
+        bail!("unimplemented: non-permutation CLI state-vector execution")
     }
     let mut bits = vec![false; flat.num_qubits];
     for (q, b) in flat.interface.iter().zip(input) {
@@ -176,7 +176,7 @@ fn run(flat: &Flat, x: &[bool], n: usize, fault: usize) -> Result<Vec<bool>> {
 /// Exhaustively prove both compositions and absence of faults for the actual
 /// token. Enumeration is streaming at arbitrary widths; it has no small-domain
 /// cutoff and never turns a sample into a proof. Large domains need a verified
-/// library certificate for practical compilation (checker support remains M2).
+/// library certificate for practical compilation (checker replays the explicit invocation binding).
 pub fn inverse_pair(obj: &Object, g: &str, ginv: &str, budget: Budget) -> Result<InversePairProof> {
     let shape = |name: &str| -> Result<(u32, u32)> {
         let f = obj
@@ -239,7 +239,7 @@ pub fn inverse_pair(obj: &Object, g: &str, ginv: &str, budget: Budget) -> Result
             .and_then(|h| h.closure_hash.clone())
             .ok_or_else(|| {
                 Error(format!(
-                    "unimplemented: qinplace unresolved closure @{name}; decision bennett-circuits-4pf (milestone 2)"
+                    "unimplemented: qinplace unresolved closure @{name}"
                 ))
             })
     };

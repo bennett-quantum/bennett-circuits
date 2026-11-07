@@ -1,4 +1,4 @@
-//! Version 1 symbolic instruction histories (ratified 7bu, ISA §6.2).
+//! Version 1 symbolic instruction histories (ISA §6.2).
 //! Atoms are formal arguments/tokens, never representative runtime values.
 use crate::{
     Error, Result, bail,
@@ -19,8 +19,7 @@ pub fn pending(o: &Object) -> Vec<PendingObligation> {
         .iter()
         .map(|i| PendingObligation {
             import: i.name.clone(),
-            rule: "§9.3 body validation and §12.3 certificate composition (bennett-circuits-z9r)"
-                .into(),
+            rule: "§9.3 body validation and §12.3 certificate composition".into(),
         })
         .collect()
 }

@@ -373,7 +373,7 @@ fn topology_schedule_and_missing_native_leaf_fail_loudly() {
         Target::parse(&v.to_jcs())
             .unwrap_err()
             .0
-            .contains("bennett-circuits-b4k")
+            .contains("§8 topology/routing schema")
     );
     let mut v = scheme_target();
     let gs = v
@@ -401,7 +401,7 @@ fn topology_schedule_and_missing_native_leaf_fail_loudly() {
         place_on_target(&o, "a", &[], &t)
             .unwrap_err()
             .0
-            .contains("b-isa-spec-8r4")
+            .contains("expansion library")
     );
 }
 
@@ -477,7 +477,7 @@ fn computed_zero_epsilon_cannot_use_accuracy_in_costs_and_unknown_decades_refuse
         &BTreeMap::from([("t".into(), val("[0,1,2]"))]),
     )
     .unwrap_err();
-    assert!(e.0.contains("bennett-circuits-v44"));
+    assert!(e.0.contains("§8.1 eps_decade definition"));
 }
 
 #[test]

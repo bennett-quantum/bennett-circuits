@@ -1,10 +1,10 @@
-//! M3 first slice: deterministic clean-workspace interval placement.
+//! Deterministic clean-workspace interval and target placement.
 //!
 //! Gate order is unchanged. A validated clean wire starts and ends at zero;
 //! its first/last gate uses therefore bound a safe live interval. Disjoint
 //! intervals may share a slot if their requested allocation classes agree.
 //! Interfaces, borrowed wires and local regions keep dedicated slots. This
-//! is target-independent placement, not class resolution or §11 scheduling.
+//! precedes target class assignment and exact sequential resource accounting.
 use crate::{
     Error, Result, bail,
     flatten::{Flat, flatten_allocations},
@@ -39,7 +39,7 @@ pub struct Placement {
 pub fn place_action(object: &Object, action: &str, args: &[Argument]) -> Result<Placement> {
     if object.schedule.is_some() {
         bail!(
-            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 scheduled placement requires the unpublished expansion library b-isa-spec-8r4 (milestone 3)"
+            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 scheduled placement requires the unpublished expansion library (§11.1)"
         );
     }
     object.check()?;
@@ -235,9 +235,7 @@ pub fn place_oracle_on_target(
     target: &Target,
 ) -> Result<Placed> {
     if object.schedule.is_some() {
-        bail!(
-            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 expansion library b-isa-spec-8r4 (milestone 3)"
-        );
+        bail!("E_SCHEDULE_INFEASIBLE: unimplemented: §11 expansion library (§11.1)");
     }
     object.check()?;
     let source = crate::oracle::specialise(object, name, budget, args)?;
@@ -724,7 +722,7 @@ impl Placed {
             ),
             (
                 "proof_status".into(),
-                s("source obligations retained; no new §12 certificate (milestone 4)"),
+                s("source obligations retained; no new §12 certificate"),
             ),
             (
                 "classes".into(),

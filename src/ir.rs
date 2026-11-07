@@ -60,7 +60,7 @@ pub struct Workspace {
     pub width: u32,
     pub kind: WsKind,
     /// Allocation class as written (`any` or a target class name);
-    /// placement resolves it in milestone 3.
+    /// target placement resolves it.
     pub class: String,
 }
 

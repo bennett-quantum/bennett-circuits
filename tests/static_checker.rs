@@ -709,10 +709,7 @@ fn inherited_control_schedule_audit_fails_explicitly_until_implemented() {
     );
     o.schedule = Some(schedule);
     let e = o.hash().unwrap_err();
-    assert!(
-        e.0.contains("unimplemented: §6.4") && e.0.contains("milestone 2"),
-        "{e}"
-    );
+    assert!(e.0.contains("unimplemented: §6.4"), "{e}");
 }
 
 #[test]
@@ -770,10 +767,7 @@ fn symbolic_workspace_is_proved_without_instantiating_unused_parameters() {
 fn serialized_symbolic_counts_keep_an_explicit_cited_refusal() {
     let body = "action @a (t:wire mut) () () (n:i8) ()\nregs {  } bounds {3}\n^entry():\nqloop n {\nd = qcopy t\ns d\nquncopy t d\n}\n";
     let e = generated(body).hash().unwrap_err();
-    assert!(
-        e.0.contains("unimplemented: §16.1") && e.0.contains("milestone 2"),
-        "{e}"
-    );
+    assert!(e.0.contains("unimplemented: §16.1"), "{e}");
 }
 
 #[test]
@@ -858,15 +852,12 @@ fn recompute_schedule_requires_an_implemented_eligibility_proof() {
         Value::parse(r#"{"realisation":"recompute"}"#).unwrap(),
     );
     let e = o.hash().unwrap_err();
-    assert!(
-        e.0.contains("unimplemented: §6.4") && e.0.contains("milestone 2"),
-        "{e}"
-    );
-    assert!(e.0.contains("b-isa-spec-8r4"), "{e}");
+    assert!(e.0.contains("unimplemented: §6.4"), "{e}");
+    assert!(e.0.contains("expansion library"), "{e}");
 }
 
 #[test]
-fn inverse_library_borrow_claim_names_the_unpublished_contract_blocker() {
+fn inverse_library_borrow_claim_cites_the_expansion_contract() {
     let mut o = generated(
         "perm_action @a (t:wire mut) () () () ()\n^entry():\nb = qborrow any 1\nswap b t\nswap b t\nqreturn b\n",
     );
@@ -883,9 +874,7 @@ fn inverse_library_borrow_claim_names_the_unpublished_contract_blocker() {
     region.insert("claims".into(), Value::parse(&format!(r#"[{{"kind":"structural","rule":"inverse_pair_library","subclaims":[],"witness":{{"library_closure_hash":"{}","claim_index":0}}}}]"#, "0".repeat(64))).unwrap());
     let e = o.hash().unwrap_err();
     assert!(
-        e.0.contains("unimplemented: §12")
-            && e.0.contains("b-isa-spec-8r4")
-            && e.0.contains("milestone 2"),
+        e.0.contains("unimplemented: §12") && e.0.contains("expansion library"),
         "{e}"
     );
 }
@@ -991,13 +980,13 @@ fn overlapping_cyclic_invocations_match_multiplicity_and_current_versions() {
 }
 
 #[test]
-fn undecided_frame_and_replay_contracts_name_their_beads() {
+fn undecided_frame_and_replay_contracts_cite_their_clauses() {
     for (field, value, bead) in [
-        ("frame", r#"{}"#, "bennett-circuits-4fa"),
+        ("frame", r#"{}"#, "§9.4"),
         (
             "claims",
             r#"[{"kind":"exhaustive","domain":{"bundles":[{"name":"t","width":1,"lo":"0","hi":"1"}],"borrowed":[{"name":"b","width":1,"lo":"0","hi":"1"}],"regions":[]},"expected":{"table":[]}}]"#,
-            "bennett-circuits-4pf",
+            "§12",
         ),
     ] {
         let mut o = generated(

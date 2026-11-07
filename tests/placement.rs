@@ -158,7 +158,7 @@ fn placement_rejects_unimplemented_schedule_consumption_by_upstream_bead() {
     o.schedule = Some(Value::parse("{}").unwrap());
     let e = place_action(&o, "a", &[]).unwrap_err();
     assert!(
-        e.0.contains("unimplemented:") && e.0.contains("b-isa-spec-8r4"),
+        e.0.contains("unimplemented:") && e.0.contains("expansion library"),
         "{e}"
     );
 }

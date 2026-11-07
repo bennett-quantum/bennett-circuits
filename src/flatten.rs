@@ -1,9 +1,9 @@
-//! Naive static placement (milestone 1): hierarchical IR → flat gate
+//! Naive static placement: hierarchical IR → flat gate
 //! list over allocated qubit indices. Interface wires come first, in
 //! `run-action` order (mut bundles, in bundles, mem cells; bundle bit
 //! `i` at offset `i`); every workspace bundle of every call instance
-//! gets fresh wires. Real placement (liveness reuse, classes, target
-//! schemes) is milestone 3.
+//! gets fresh wires. Liveness reuse, target classes and scheme placement
+//! are handled by `placement`.
 
 use std::collections::BTreeMap;
 
