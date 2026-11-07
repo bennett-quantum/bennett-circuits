@@ -86,3 +86,21 @@ stream**, tracked as `bennett-circuits-so2`: `classical::execute` (538), checker
 `schema` (329), `static_parameter_action` (306), `classical_schema` (481), oracle
 `row` (461) and `specialise_impl` (364). They need opcode/transfer/build phases
 with independent witnesses; this checkpoint does not claim those splits done.
+
+## External exporters
+
+QIR requires both `llvm-as-18` and `opt-18`; missing executables panic with
+`required external validator <tool>`. A named missing-tool regression checks
+this failure, and an empty-PATH reproduction of the old test demonstrated its
+incorrect success before the fix. QASM and Quil now pass independent syntax
+parsers (`openqasm3` 1.0.1 / ANTLR 4.13.2, `quil` 0.37.3 / NumPy 2.5.4),
+including all exported gate families, modifiers and subnormal-angle spelling.
+Each parser also rejects a malformed control input. These prove grammar
+acceptance; the exhaustive ISA CLI differential remains the semantic oracle.
+`timeout 900 cargo test --offline -j3 --test integration exporters:: --
+--test-threads=4` passed all 8 exporter tests in 0.94 s.
+
+Parser prerequisites are cached once with:
+`uv run --no-project --with "openqasm3[parser]==1.0.1" --with "quil==0.37.3"
+--with "antlr4-python3-runtime==4.13.2" --with "numpy==2.5.4" -- python3 -c pass`.
+Tests then use `uv run --offline`; a missing parser/tool fails explicitly.
