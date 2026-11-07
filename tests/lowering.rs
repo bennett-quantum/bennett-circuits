@@ -2,11 +2,8 @@
 //! hierarchy preserved, every §4 Q row implemented or failing with
 //! `unimplemented: <row> (milestone N)`.
 
-#[path = "support/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-#[path = "support/sibling.rs"]
-mod sibling;
+use super::fixtures;
+use super::sibling;
 use std::path::PathBuf;
 
 use bennett_circuits::flatten::flatten;
@@ -158,7 +155,7 @@ fn missing_specialisation_bindings_fail_loudly() {
         ("qinplace @g @ginv tk t\n", "missing qinplace budget token"),
         (
             "rz theta t[0]\n",
-            "unimplemented: rz with non-literal angle (milestone 2)",
+            "unimplemented: rz with non-literal angle",
         ),
     ] {
         let obj = synthetic(body);

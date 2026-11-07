@@ -1,10 +1,10 @@
-//! M3 first slice: deterministic clean-workspace interval placement.
+//! Deterministic clean-workspace interval and target placement.
 //!
 //! Gate order is unchanged. A validated clean wire starts and ends at zero;
 //! its first/last gate uses therefore bound a safe live interval. Disjoint
 //! intervals may share a slot if their requested allocation classes agree.
 //! Interfaces, borrowed wires and local regions keep dedicated slots. This
-//! is target-independent placement, not class resolution or §11 scheduling.
+//! precedes target class assignment and exact sequential resource accounting.
 use crate::{
     Error, Result, bail,
     flatten::{Flat, flatten_allocations},
@@ -39,7 +39,7 @@ pub struct Placement {
 pub fn place_action(object: &Object, action: &str, args: &[Argument]) -> Result<Placement> {
     if object.schedule.is_some() {
         bail!(
-            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 scheduled placement requires the unpublished expansion library b-isa-spec-8r4 (milestone 3)"
+            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 scheduled placement requires the unpublished expansion library (§11.1)"
         );
     }
     object.check()?;
@@ -235,9 +235,7 @@ pub fn place_oracle_on_target(
     target: &Target,
 ) -> Result<Placed> {
     if object.schedule.is_some() {
-        bail!(
-            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 expansion library b-isa-spec-8r4 (milestone 3)"
-        );
+        bail!("E_SCHEDULE_INFEASIBLE: unimplemented: §11 expansion library (§11.1)");
     }
     object.check()?;
     let source = crate::oracle::specialise(object, name, budget, args)?;
@@ -246,28 +244,14 @@ pub fn place_oracle_on_target(
     placed.request = request(name, args, Some(budget));
     Ok(placed)
 }
-fn place_target_program(
-    object: &Object,
-    action: &str,
-    target: &Target,
-    source: Program,
-    placement: Placement,
-) -> Result<Placed> {
-    let report = object.hash()?;
-    let (_, _, _, contexts) = crate::flatten::flatten_contexts(&source)?;
-    if contexts.own.len() != placement.flat.gates.len() {
-        bail!("placement: gate context trace length mismatch");
-    }
-    let ptr = object.header.ptr_width;
-    if !crate::target::array(crate::target::field(
-        &target.document,
-        "ptr_widths_supported",
-    )?)?
-    .iter()
-    .any(|v| v.as_u64() == Some(u64::from(ptr)))
-    {
-        bail!("§8.3 unsupported pointer width {ptr}");
-    }
+#[derive(Debug)]
+struct ClassAssignment {
+    intervals: Vec<Vec<(usize, usize, bool)>>,
+    classes: Vec<String>,
+    execution_peaks: BTreeMap<String, usize>,
+}
+
+fn assign_classes(placement: &Placement, target: &Target) -> Result<ClassAssignment> {
     let n = placement.flat.gates.len();
     let mut requests = vec!["any".to_string(); placement.flat.num_qubits];
     let mut intervals = vec![Vec::<(usize, usize, bool)>::new(); requests.len()];
@@ -309,14 +293,49 @@ fn place_target_program(
             .extend(intervals[q].iter().map(|(s, e, _)| (*s, *e)));
         classes[q] = name;
     }
+    let execution_peaks = assigned
+        .iter()
+        .map(|(c, spans)| (c.clone(), peak_indices(spans)))
+        .collect::<BTreeMap<_, _>>();
+    Ok(ClassAssignment {
+        intervals,
+        classes,
+        execution_peaks,
+    })
+}
+
+fn place_target_program(
+    object: &Object,
+    action: &str,
+    target: &Target,
+    source: Program,
+    placement: Placement,
+) -> Result<Placed> {
+    let report = object.hash()?;
+    let (_, _, _, contexts) = crate::flatten::flatten_contexts(&source)?;
+    if contexts.own.len() != placement.flat.gates.len() {
+        bail!("placement: gate context trace length mismatch");
+    }
+    let ptr = object.header.ptr_width;
+    if !crate::target::array(crate::target::field(
+        &target.document,
+        "ptr_widths_supported",
+    )?)?
+    .iter()
+    .any(|v| v.as_u64() == Some(u64::from(ptr)))
+    {
+        bail!("§8.3 unsupported pointer width {ptr}");
+    }
+    let n = placement.flat.gates.len();
+    let ClassAssignment {
+        intervals,
+        mut classes,
+        mut execution_peaks,
+    } = assign_classes(&placement, target)?;
     let caps = crate::target::field(&target.document, "capabilities")?;
     if crate::target::field(caps, "max_parallel")?.as_u64() == Some(0) && n != 0 {
         bail!("§8.2 max_parallel=0 forbids gates");
     }
-    let mut execution_peaks = assigned
-        .iter()
-        .map(|(c, spans)| (c.clone(), peak_indices(spans)))
-        .collect::<BTreeMap<_, _>>();
     let mut flat = placement.flat.clone();
     flat.gates.clear();
     let mut events = Vec::new();
@@ -703,7 +722,7 @@ impl Placed {
             ),
             (
                 "proof_status".into(),
-                s("source obligations retained; no new §12 certificate (milestone 4)"),
+                s("source obligations retained; no new §12 certificate"),
             ),
             (
                 "classes".into(),
@@ -805,4 +824,64 @@ fn request(name: &str, args: &[Argument], budget: Option<crate::oracle::Budget>)
             ),
         ),
     ]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::target::Class;
+
+    #[test]
+    fn class_assignment_uses_peak_liveness_and_jcs_class_order() {
+        let mut placement = Placement {
+            flat: Flat {
+                num_qubits: 2,
+                interface: vec![],
+                workspace: vec![0, 1],
+                gates: vec![],
+            },
+            logical_to_physical: vec![Some(0), Some(1)],
+            lifetimes: (0..2)
+                .map(|q| LiveRange {
+                    logical: q,
+                    physical: q,
+                    start: q,
+                    end: q + 1,
+                    kind: WsKind::Clean,
+                    class: "any".into(),
+                })
+                .collect(),
+        };
+        let target = Target {
+            document: Value::Null,
+            hash: String::new(),
+            classes: ["z", "a"]
+                .into_iter()
+                .map(|n| {
+                    (
+                        n.into(),
+                        Class {
+                            capacity: Some(1),
+                            dirty_rate: Rational::ZERO,
+                        },
+                    )
+                })
+                .collect(),
+            resources: BTreeMap::new(),
+            tables: BTreeMap::new(),
+        };
+        let assigned = assign_classes(&placement, &target).unwrap();
+        assert_eq!(assigned.classes, ["a", "a"]);
+        assert_eq!(assigned.execution_peaks["a"], 1);
+        placement.lifetimes[1].start = 0;
+        let assigned = assign_classes(&placement, &target).unwrap();
+        assert_eq!(assigned.classes, ["a", "z"]);
+        placement.lifetimes[1].class = "a".into();
+        assert!(
+            assign_classes(&placement, &target)
+                .unwrap_err()
+                .0
+                .contains("capacity constraint")
+        );
+    }
 }

@@ -973,7 +973,7 @@ fn abstract_action(o: &Object, f: &Function, p: &Program) -> Result<()> {
                 .any(|n| matches!(n,Node::Call{controls,..}if !controls.is_empty())))
     {
         bail!(
-            "unimplemented: §6.4 inherited-control cleanup schedule key validation; generated-operation matching requires unpublished expansion library b-isa-spec-8r4; decision bennett-circuits-yz8 (milestone 2)"
+            "unimplemented: §6.4 inherited-control cleanup schedule key validation; generated-operation matching requires unpublished expansion library (§11.1)"
         );
     }
     validate_pairs(p)?;
@@ -1363,7 +1363,7 @@ pub(crate) fn translation_component(gates: &[FlatGate], b: &BTreeSet<usize>) -> 
     }
     if !valid {
         bail!(
-            "checker: borrow frame fails translation lemma (§5.6); unimplemented: certificate-backed borrow frame (milestone 2)"
+            "checker: borrow frame fails translation lemma (§5.6); unimplemented: certificate-backed borrow frame"
         )
     }
     Ok(())
@@ -1393,7 +1393,7 @@ pub fn validate(o: &Object) -> Result<()> {
                         .is_some()
                 {
                     bail!(
-                        "E_SCHEDULE_INFEASIBLE: executable/numerical/channel certificate replay requires expansion library b-isa-spec-8r4 (§12.1)"
+                        "E_SCHEDULE_INFEASIBLE: executable/numerical/channel certificate replay requires expansion library (§11.1) (§12.1)"
                     )
                 }
             }
@@ -1447,9 +1447,7 @@ pub fn validate(o: &Object) -> Result<()> {
         if f.is_action() {
             for i in all(f) {
                 if i.opcode == "qloop" && !matches!(i.operands.first(), Some(Operand::Int(_))) {
-                    bail!(
-                        "unimplemented: §16.1/§5.3 symbolic trip-count object validation (milestone 2)"
-                    );
+                    bail!("unimplemented: §16.1/§5.3 symbolic trip-count object validation");
                 }
             }
             action_readonly(o, f)?;
@@ -2011,9 +2009,7 @@ pub(crate) fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
                     inner.push(c);
                 } else {
                     let Some(Operand::Int(_)) = i.operands.first() else {
-                        bail!(
-                            "unimplemented: §5.3 symbolic trip-count bound validation (milestone 2)"
-                        )
+                        bail!("unimplemented: §5.3 symbolic trip-count bound validation")
                     };
                     let n = int(&i.operands[0])?;
                     if i.operands.len() == 3 {
@@ -2245,7 +2241,7 @@ pub(crate) fn static_parameter_action(o: &Object, f: &Function) -> Result<()> {
                 }
             }
             _ => bail!(
-                "unimplemented: §6 symbolic classical action validation for {}; decisions bennett-circuits-7bu and bennett-circuits-z9r (milestone 2)",
+                "unimplemented: §6 symbolic classical action validation for {}",
                 i.opcode
             ),
         }
@@ -2795,7 +2791,7 @@ fn classical_schema(o: &Object, f: &Function) -> Result<()> {
                         }
                         result = Some(Type::Int(n));
                     }
-                    _ => bail!("unimplemented: §3.3 classical schema {op} (milestone 2)"),
+                    _ => bail!("unimplemented: §3.3 classical schema {op}"),
                 }
                 if let Some(t) = result {
                     types.insert(i.lhs[0].clone(), t);

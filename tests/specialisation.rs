@@ -1,9 +1,5 @@
-#[path = "support/exact.rs"]
-mod exact;
-#[path = "support/sibling.rs"]
-mod sibling;
-#[path = "support/sim.rs"]
-mod sim;
+use super::sibling;
+use super::sim;
 use bennett_circuits::{
     flatten::flatten,
     lower::lower_program_with_args,

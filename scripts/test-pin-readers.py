@@ -21,10 +21,7 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     pins = tomllib.loads((root / "gate.toml").read_text())["siblings"]
-    readers = args.tests or sorted(
-        p.stem for p in (root / "tests").glob("*.rs")
-        if p.stem == "pinned_siblings" or "bennett-isa-spec" in p.read_text() or "sibling::" in p.read_text()
-    )
+    readers = args.tests or ["integration", "oracles"]
     assert readers, "no sibling-reading test binaries discovered"
     with tempfile.TemporaryDirectory(prefix="pin-readers-") as tmp:
         workspace = Path(tmp)

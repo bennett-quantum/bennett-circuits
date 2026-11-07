@@ -326,7 +326,7 @@ impl Build {
                 }
                 v
             }
-            _ => bail!("unimplemented: lift.{op} (milestone 2)"),
+            _ => bail!("unimplemented: lift.{op}"),
         })
     }
     fn copy(&mut self, src: &Word, dst: &Word, cs: &[Bit]) {
@@ -606,11 +606,10 @@ impl<'a> Machine<'a> {
                 let Some(Argument::Token(budget)) = self.args.get(token) else {
                     bail!("oracle: missing budget token {token}")
                 };
-                let cf = self.obj.function(name).ok_or_else(|| {
-                    Error(format!(
-                        "unimplemented: imported oracle @{name} (milestone 2)"
-                    ))
-                })?;
+                let cf = self
+                    .obj
+                    .function(name)
+                    .ok_or_else(|| Error(format!("unimplemented: imported oracle @{name}")))?;
                 let Operand::List(actual_args) = &operands[6] else {
                     bail!("oracle: call args list")
                 };
@@ -979,7 +978,7 @@ impl<'a> Machine<'a> {
                 let value = self.b.bin(op, &a, &bb)?;
                 values.push((value, d.clone().unwrap()));
             }
-            _ => bail!("unimplemented: {} (milestone 2)", i.opcode),
+            _ => bail!("unimplemented: {}", i.opcode),
         }
         if !recorded {
             self.b.flip(flag, &[at.clone(), bad.clone()]);
@@ -1009,7 +1008,7 @@ impl<'a> Machine<'a> {
         let mut args = Vec::new();
         for word in actuals {
             let Some(Bit::Q(q, true)) = word.first() else {
-                bail!("unimplemented: non-location nested oracle operand (milestone 2)")
+                bail!("unimplemented: non-location nested oracle operand")
             };
             if word
                 .iter()

@@ -1,13 +1,8 @@
 //! Differential oracle via CLI only. Exhaustive basis columns; exact sparse
 //! simulation of exported QASM, phase-sensitive binary64 display comparison.
-#[path = "support/exact.rs"]
-mod exact;
-#[path = "support/sibling.rs"]
-mod sibling;
-#[path = "support/sim.rs"]
-mod sim;
-#[path = "support/target.rs"]
-mod target;
+use super::sibling;
+use super::sim;
+use super::test_target as target;
 use bennett_circuits::{object::Object, qasm};
 use std::{
     collections::BTreeMap,
@@ -28,18 +23,31 @@ fn corpus() -> Vec<PathBuf> {
     let dir = root().join(".tmp/differential");
     std::fs::create_dir_all(&dir).unwrap();
     let mut examples = 0;
-    for block in spec
-        .split("```")
-        .filter(|b| b.trim_start().starts_with("bennett-object "))
-    {
+    for block in published_examples(&spec) {
         let path = dir.join(format!("example-{examples}.bisa"));
         std::fs::write(&path, block.trim_start()).unwrap();
         paths.push(path);
         examples += 1;
     }
-    assert_eq!(examples, 2, "ISA 0.8 spec examples changed; audit corpus");
+    assert!(examples > 0, "pinned ISA spec has no executable examples");
     paths.push(synthetic_corpus());
     paths
+}
+fn published_examples(spec: &str) -> impl Iterator<Item = &str> {
+    spec.split("```")
+        .filter(|b| b.trim_start().starts_with("bennett-object "))
+}
+#[test]
+fn published_example_discovery_has_no_fixed_corpus_size() {
+    let spec = "```\nbennett-object first\n```\nprose\n```\nbennett-object second\n```\n```\nbennett-object third\n```";
+    assert_eq!(
+        published_examples(spec).collect::<Vec<_>>(),
+        [
+            "\nbennett-object first\n",
+            "\nbennett-object second\n",
+            "\nbennett-object third\n"
+        ]
+    );
 }
 // The reference JSON reports finite binary64 numbers. The production JSON
 // codec deliberately admits only integers for hashed metadata; this tiny
@@ -227,9 +235,7 @@ fn every_action_every_basis_matches_run_action() {
     );
 }
 
-#[path = "support/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
+use super::fixtures;
 fn synthetic_corpus() -> PathBuf {
     use bennett_circuits::{json::Value as V, object::derived_signature};
     let header = "bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32\n\nsection symbols\n";

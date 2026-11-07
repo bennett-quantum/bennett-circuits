@@ -349,7 +349,7 @@ fn schedule(v: &Value) -> Result<()> {
                 }
                 if c["realisation"].as_str() == Some("recompute") {
                     bail!(
-                        "unimplemented: §6.4 recompute eligibility and cleanup schedule matching; requires unpublished expansion library b-isa-spec-8r4; decision bennett-circuits-yz8 (milestone 2)"
+                        "unimplemented: §6.4 recompute eligibility and cleanup schedule matching; requires unpublished expansion library (§11.1)"
                     );
                 }
             }
@@ -952,7 +952,7 @@ fn certificate_mode(v: &Value, draft: bool) -> Result<()> {
                     }
                     if e["realisation"].as_str() == Some("recompute") {
                         bail!(
-                            "unimplemented: §6.4 recompute eligibility and certificate cleanup matching; requires unpublished expansion library b-isa-spec-8r4; decision bennett-circuits-yz8 (milestone 2)"
+                            "unimplemented: §6.4 recompute eligibility and certificate cleanup matching; requires unpublished expansion library (§11.1)"
                         );
                     }
                     point_path(&e["path"], p)?;

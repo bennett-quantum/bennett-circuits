@@ -45,14 +45,14 @@ fn direct(
         .map(|r| {
             let w = r.ty.wire_width().unwrap();
             if w > 128 {
-                bail!("unimplemented: §14.1 direct diagnostic reg widths above 128 (milestone 2)")
+                bail!("unimplemented: §14.1 direct diagnostic reg widths above 128")
             };
             Ok((r.name.clone(), (0u128, w)))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     for (p, bs) in f.groups[0].iter().zip(input) {
         if bs.len() > 128 {
-            bail!("unimplemented: §14.1 direct diagnostic input widths above 128 (milestone 2)")
+            bail!("unimplemented: §14.1 direct diagnostic input widths above 128")
         };
         ws.insert(p.name.clone(), (to_int(bs), bs.len() as u32));
     }
@@ -79,7 +79,7 @@ fn direct(
                 unreachable!()
             };
             if w != 8 {
-                bail!("unimplemented: §14.1 direct diagnostic non-byte region cells (milestone 2)")
+                bail!("unimplemented: §14.1 direct diagnostic non-byte region cells")
             };
             let base = layout
                 .get("interface_regions")
@@ -125,8 +125,12 @@ fn direct(
                     .copied()
                     .ok_or_else(|| Error(format!("step-check: unknown {n}"))),
                 Operand::Int(n) => Ok((
-                    n.parse()
-                        .map_err(|_| Error("unimplemented: §14.1 direct step-check literals wider than 128 bits (milestone 6)".into()))?,
+                    n.parse().map_err(|_| {
+                        Error(
+                            "unimplemented: §14.1 direct step-check literals wider than 128 bits"
+                                .into(),
+                        )
+                    })?,
                     o.header.ptr_width,
                 )),
                 _ => bail!("step-check: integer operand"),
@@ -276,7 +280,7 @@ fn direct(
                     }
                     None
                 }
-                _ => bail!("unimplemented: §14.1 independent diagnostic row {op} (milestone 2)"),
+                _ => bail!("unimplemented: §14.1 independent diagnostic row {op}"),
             }
         };
         if let Some(v) = value {
@@ -297,7 +301,7 @@ pub fn check(
         .function(name)
         .ok_or_else(|| Error("step-check: missing oracle".into()))?;
     if !f.groups[4].is_empty() {
-        bail!("unimplemented: §14.1 step-check classical arguments (milestone 2)")
+        bail!("unimplemented: §14.1 step-check classical arguments")
     }
     let p = crate::oracle::specialise(o, name, budget, &[])?;
     let flat = crate::flatten::flatten(&p)?;
@@ -314,7 +318,7 @@ pub fn check(
         .sum::<usize>();
     let total = input_width + mem_width;
     if total > 16 {
-        bail!("unimplemented: §17.13 sampled step-check above 16 free bits (milestone 2)")
+        bail!("unimplemented: §17.13 sampled step-check above 16 free bits")
     }
     if fixed.keys().any(|n| !c.mem.iter().any(|m| m.name == *n)) {
         bail!("step-check: unknown fixed region")
@@ -343,7 +347,7 @@ pub fn check(
         let n = f.groups[1][0].ty.wire_width().unwrap() as usize;
         let fw = f.groups[2][0].ty.wire_width().unwrap() as usize;
         if n > 128 || fw > 128 {
-            bail!("unimplemented: §14.1 direct diagnostic outcome widths above 128 (milestone 2)")
+            bail!("unimplemented: §14.1 direct diagnostic outcome widths above 128")
         }
         let mut initial = vec![false; n + fw];
         for bs in &inputs {

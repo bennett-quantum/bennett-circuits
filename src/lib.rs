@@ -1,7 +1,7 @@
 //! bennett-circuits: the bounded circuit specialiser for the Bennett
 //! virtual ISA (ISA 0.8, consumed only through the published spec in
 //! `bennett-isa-spec`). See `docs/PLAN.md` for the architecture and
-//! milestone scope.
+//! supported contracts.
 
 pub mod amplitude;
 mod borrow;
@@ -39,8 +39,7 @@ pub fn version() -> &'static str {
 }
 
 /// The one error type: a loud, contextual message. Fail fast (CLAUDE rule 1):
-/// unsupported input is an error naming the construct and, where a later
-/// milestone owns it, `unimplemented: <row> (milestone N)`.
+/// unsupported input is an error naming the construct and specification clause.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error(pub String);
 

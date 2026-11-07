@@ -3,8 +3,7 @@
 //! interface/closure hashes, on every spec example (§16.3) and every
 //! fixture. The reference binary is used through its CLI only.
 
-#[path = "support/sibling.rs"]
-mod sibling;
+use super::sibling;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;

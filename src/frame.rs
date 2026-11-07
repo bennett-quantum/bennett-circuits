@@ -1,4 +1,4 @@
-//! Typed frame records from ISA 0.9-draft §9.4 (ratified 4fa).
+//! Typed frame records from ISA 0.9-draft §9.4.
 //! Acceptance requires an explicit draft opt-in; these are not ISA 0.8 fields.
 use crate::{Error, Result, bail, json::Value};
 use std::collections::BTreeMap;
@@ -69,9 +69,7 @@ pub struct Frame {
 impl Frame {
     pub fn parse(v: &Value, draft: bool) -> Result<Self> {
         if !draft {
-            bail!(
-                "unimplemented: frame requires explicit --isa 0.9-draft; bennett-circuits-4fa (§9.4)"
-            )
+            bail!("unimplemented: frame requires explicit --isa 0.9-draft (§9.4)")
         }
         let keys = ["slots", "scratch", "history", "borrow", "ancillae"];
         let m = fields(
@@ -239,7 +237,7 @@ pub fn placed(
                 .ok_or("frame: source interface mapping")?;
             let class = p.classes.get(offset).ok_or("frame: missing class")?;
             if p.classes[offset..offset + width].iter().any(|k| k != class) {
-                bail!("unimplemented: heterogeneous slot class; bennett-circuits-4fa (§9.4)")
+                bail!("unimplemented: heterogeneous slot class (§9.4)")
             }
             slots.push(crate::certificate::obj([
                 ("id", Value::Str(format!("{role}:{i}"))),
@@ -299,7 +297,7 @@ pub fn placed(
                     .collect::<std::collections::BTreeSet<_>>();
                 if schemes.len() != 1 {
                     bail!(
-                        "E_SCHEDULE_INFEASIBLE: shared scheme frame identity requires expansion library b-isa-spec-8r4 (§9.4)"
+                        "E_SCHEDULE_INFEASIBLE: shared scheme frame identity requires expansion library (§11.1) (§9.4)"
                     )
                 }
                 record.insert(
@@ -356,7 +354,7 @@ impl Frame {
             let value = crate::target::evaluate(&slot.width, &BTreeMap::new(), &BTreeMap::new())
                 .map_err(|e| {
                     Error(format!(
-                        "frame: interface width must be signature-fixed; bennett-circuits-4fa: {e}"
+                        "frame: interface width must be signature-fixed (§9.4): {e}"
                     ))
                 })?
                 .index()? as u64;

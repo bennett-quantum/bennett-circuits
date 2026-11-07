@@ -8,3 +8,13 @@ Cargo.lock
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+
+# Generated tooling artifacts and obsolete scratch context.
+__pycache__/
+*.pyc
+*.log
+.beads/**/LOCK
+*.darc
+*.backup
+LAST-RUN*
+PROGRESS*

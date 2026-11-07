@@ -1,11 +1,6 @@
 //! Executable-text validation of QIR and Quil, independent of the IR comments.
-#[path = "support/sibling.rs"]
-mod sibling;
-#[path = "support/exact.rs"]
-#[allow(dead_code)]
-mod exact;
-#[path = "support/sim.rs"]
-mod sim;
+use super::sibling;
+use super::sim;
 use bennett_circuits::{flatten::flatten, ir::*, qir, quil};
 fn program() -> Program {
     let q = |i| QubitRef::new("q", i);
@@ -115,9 +110,7 @@ fn executable_mutations_are_seen_without_ir_metadata() {
 }
 #[test]
 fn external_llvm_assembler_and_verifier_accept_qir() {
-    use std::process::Command;
-    let root =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/sol-circuits-m5/validators");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/export-validators/qir");
     std::fs::create_dir_all(&root).unwrap();
     let input = root.join("all.ll");
     let output = root.join("all.bc");
@@ -136,19 +129,60 @@ fn external_llvm_assembler_and_verifier_accept_qir() {
             ],
         ),
     ] {
-        match Command::new(tool).args(args).output() {
-            Ok(o) => assert!(
-                o.status.success(),
-                "{tool}: {}",
-                String::from_utf8_lossy(&o.stderr)
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("external validator unavailable: {tool}");
-                return;
-            }
-            Err(e) => panic!("{tool}: {e}"),
-        }
+        require_validator(tool, &args);
     }
+}
+
+fn require_validator(tool: &str, args: &[&str]) {
+    let output = std::process::Command::new(tool)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("required external validator {tool}: {error}"));
+    assert!(
+        output.status.success(),
+        "{tool}: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[should_panic(expected = "required external validator")]
+fn missing_external_validator_is_a_failure() {
+    require_validator("bennett-missing-external-validator", &[]);
+}
+
+#[test]
+fn external_qasm_and_quil_parsers_accept_exported_syntax() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = root.join(".tmp/export-validators/syntax");
+    std::fs::create_dir_all(&output).unwrap();
+    let qasm = output.join("all.qasm");
+    let quil = output.join("all.quil");
+    std::fs::write(&qasm, bennett_circuits::qasm::export(&program()).unwrap()).unwrap();
+    std::fs::write(&quil, bennett_circuits::quil::export(&program()).unwrap()).unwrap();
+    let script = root.join("scripts/validate_exporters.py");
+    require_validator(
+        "uv",
+        &[
+            "run",
+            "--offline",
+            "--no-project",
+            "--with",
+            "openqasm3[parser]==1.0.1",
+            "--with",
+            "quil==0.37.3",
+            "--with",
+            "antlr4-python3-runtime==4.13.2",
+            "--with",
+            "numpy==2.5.4",
+            "--",
+            "python3",
+            script.to_str().unwrap(),
+            qasm.to_str().unwrap(),
+            quil.to_str().unwrap(),
+        ],
+    );
 }
 #[test]
 fn zero_wire_identity_is_valid_without_a_sentinel() {
@@ -254,6 +288,7 @@ fn every_gate_every_control_polarity_pattern_has_the_same_exact_state() {
                     } else {
                         quil::parse_flat(&text).unwrap()
                     };
+                    assert_eq!(original.num_qubits, parsed.num_qubits, "{name}: {gate:?}");
                     same_states(&original, &parsed);
                 }
             }

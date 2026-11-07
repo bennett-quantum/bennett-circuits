@@ -241,7 +241,7 @@ impl Registry {
         for o in std::iter::once(root).chain(libraries) {
             if o.schedule.is_some() {
                 bail!(
-                    "E_SCHEDULE_INFEASIBLE: linked schedule composition requires expansion library b-isa-spec-8r4 (§9.3)"
+                    "E_SCHEDULE_INFEASIBLE: linked schedule composition requires expansion library (§11.1) (§9.3)"
                 )
             }
             o.check()?;
@@ -431,11 +431,7 @@ impl Registry {
         self.closures
             .get(hash)
             .and_then(|n| self.object.function(n))
-            .ok_or_else(|| {
-                Error(format!(
-                    "closure registry: unresolved {hash} (§12.3; bennett-circuits-4pf)"
-                ))
-            })
+            .ok_or_else(|| Error(format!("closure registry: unresolved {hash} (§12.3)")))
     }
 }
 

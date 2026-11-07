@@ -1,8 +1,8 @@
 //! ISA 0.8 object loader (§16 canonical textual form), signature/schema
 //! validation, §9.2 identity, and `check` (parse + validate + verify every
 //! stored interface hash — the same verdict and hashes as
-//! `bennett-isa-ref check` on the fixture/example corpus; the §6/§5.6/§5.5
-//! static disciplines are milestone 2, see docs/PLAN.md).
+//! `bennett-isa-ref check` on the fixture/example corpus). Static proof
+//! obligations are validated by `checker` before identity is reported.
 //!
 //! No code is shared with the reference interpreter; everything here is
 //! derived from the published spec text and its §16.3 vectors.
@@ -1132,8 +1132,8 @@ fn data_signature(entry: &DataEntry) -> Value {
 }
 
 /// Trip counts of every `qloop` in text order, outer before inner (§5.3).
-/// `None` entries are non-literal counts, which milestone 1 cannot decide
-/// (lowering rejects them as milestone-2 specialisation).
+/// `None` entries are non-literal counts, resolved during argument
+/// specialisation (§5.3).
 fn body_bounds(instrs: &[Instr], out: &mut Vec<Option<u64>>) {
     for instr in instrs {
         if instr.opcode == "qloop" {

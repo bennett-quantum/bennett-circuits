@@ -1,12 +1,7 @@
-#[path = "support/sibling.rs"]
-mod sibling;
-#[path = "support/exact.rs"]
-mod exact;
-#[path = "support/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
-#[path = "support/sim.rs"]
-mod sim;
+use super::exact;
+use super::fixtures;
+use super::sibling;
+use super::sim;
 use bennett_circuits::{
     flatten::{Flat, flatten},
     json::Value,
@@ -163,7 +158,7 @@ fn placement_rejects_unimplemented_schedule_consumption_by_upstream_bead() {
     o.schedule = Some(Value::parse("{}").unwrap());
     let e = place_action(&o, "a", &[]).unwrap_err();
     assert!(
-        e.0.contains("unimplemented:") && e.0.contains("b-isa-spec-8r4"),
+        e.0.contains("unimplemented:") && e.0.contains("expansion library"),
         "{e}"
     );
 }

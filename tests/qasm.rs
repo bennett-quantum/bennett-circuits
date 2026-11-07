@@ -1,8 +1,5 @@
-#[path = "support/sibling.rs"]
-mod sibling;
-#[path = "support/fixtures.rs"]
-#[allow(dead_code)]
-mod fixtures;
+use super::fixtures;
+use super::sibling;
 use bennett_circuits::{object::Object, qasm};
 
 #[test]

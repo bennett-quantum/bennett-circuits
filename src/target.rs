@@ -137,7 +137,7 @@ impl Rational {
             }
         }
         if d != 1 {
-            bail!("unimplemented: nonterminating rational resource decimal (milestone 3)");
+            bail!("unimplemented: nonterminating rational resource decimal");
         }
         let mut n = self.numerator.unsigned_abs();
         let den = self.denominator as u128;
@@ -172,9 +172,7 @@ fn keys(v: &V, allowed: &[&str]) -> Result<()> {
     for k in map(v)?.keys() {
         if !allowed.contains(&k.as_str()) {
             if ["topology", "connectivity", "routing"].contains(&k.as_str()) {
-                bail!(
-                    "unimplemented: §8 topology/routing schema bennett-circuits-b4k (milestone 3)"
-                );
+                bail!("unimplemented: §8 topology/routing schema");
             }
             bail!("§8 unknown field {k}");
         }
@@ -264,7 +262,7 @@ pub fn evaluate(
         let i = if index == "k" {
             *vars.get("k").ok_or("§8.1 unbound k")?
         } else {
-            bail!("unimplemented: §8.1 eps_decade definition bennett-circuits-v44 (milestone 3)");
+            bail!("unimplemented: §8.1 eps_decade definition");
         };
         return number(
             array(tables.get(name).ok_or("§8.1 unknown table")?)?
@@ -676,7 +674,7 @@ fn validate_signature(v: &V) -> Result<()> {
     ]
     .contains(&op)
     {
-        bail!("unimplemented: target opcode {op} (milestone 3)");
+        bail!("unimplemented: target opcode {op}");
     }
     let c = field(v, "controls")?;
     keys(c, &["min", "max"])?;
@@ -980,7 +978,7 @@ fn template_gate(op: &str, wires: &[usize], params: &[Rational]) -> Result<(Base
         "rx" => BaseGate::Rx(param.unwrap()),
         "ry" => BaseGate::Ry(param.unwrap()),
         "rz" => BaseGate::Rz(param.unwrap()),
-        _ => bail!("unimplemented: template gate {op} (milestone 3)"),
+        _ => bail!("unimplemented: template gate {op}"),
     };
     Ok((g, k))
 }

@@ -1,7 +1,5 @@
 //! Lowering of Q-tier action bodies (§5.3, rows of §4.3–§4.7) into the
-//! hierarchical circuit IR. Every §4 Q row is implemented here or fails
-//! with `unimplemented: <row> (milestone N)`; oracle specialisation
-//! (§5.2) is milestone 2 (docs/PLAN.md).
+//! hierarchical circuit IR. Oracle construction (§5.2) lives in `oracle`.
 //!
 //! The input is a parsed `Object`; callers that need verified identity
 //! run `Object::check` first (the CLI and the differential harness do).
@@ -47,15 +45,13 @@ impl<'a> Lowerer<'a> {
         }
         let Some(f) = self.obj.function(name) else {
             if self.obj.imports.iter().any(|i| i.name == name) {
-                bail!(
-                    "unimplemented: lowering imported action @{name} without a body; decision bennett-circuits-z9r (milestone 2)"
-                );
+                bail!("unimplemented: lowering imported action @{name} without a body");
             }
             bail!("lower: unknown action @{name}");
         };
         if !f.is_action() {
             bail!(
-                "lower: @{name} is a {}, not an action; oracle specialisation is milestone 2",
+                "lower: @{name} is a {}, not an action; use the oracle specialisation API",
                 f.kind.symbol_kind()
             );
         }
@@ -377,7 +373,7 @@ fn int_literal(op: &Operand, row: &str, f: &str) -> Result<u64> {
         Operand::Int(n) => n
             .parse::<u64>()
             .map_err(|_| Error(format!("lower: @{f} {row} count {n} out of range"))),
-        other => bail!("unimplemented: {row} with non-literal count {other:?} (milestone 2)"),
+        other => bail!("unimplemented: {row} with non-literal count {other:?}"),
     }
 }
 
@@ -565,7 +561,7 @@ impl<'a> FnLower<'a> {
                 Ok(v)
             }
             other => bail!(
-                "unimplemented: {} with non-literal angle (milestone 2): {other:?}",
+                "unimplemented: {} with non-literal angle: {other:?}",
                 instr.opcode
             ),
         }
@@ -1126,9 +1122,7 @@ impl<'a> FnLower<'a> {
 
                 let Some(cf) = self.obj.function(&callee) else {
                     if self.obj.imports.iter().any(|i| i.name == callee) {
-                        bail!(
-                            "unimplemented: imported action @{callee} workspace effects; decision bennett-circuits-z9r (milestone 2)"
-                        );
+                        bail!("unimplemented: imported action @{callee} workspace effects");
                     }
                     bail!("lower: @{} calls unknown action @{callee}", self.f.name);
                 };
@@ -1315,11 +1309,10 @@ impl FnLower<'_> {
         let Some(Argument::Token(budget)) = self.arguments.get(token) else {
             bail!("lower: missing oracle token {token}")
         };
-        let cf = self.obj.function(name).ok_or_else(|| {
-            Error(format!(
-                "unimplemented: imported oracle @{name}; decision bennett-circuits-z9r (milestone 2)"
-            ))
-        })?;
+        let cf = self
+            .obj
+            .function(name)
+            .ok_or_else(|| Error(format!("unimplemented: imported oracle @{name}")))?;
         let Operand::List(ins) = &ops[2] else {
             bail!("lower: oracle input list")
         };

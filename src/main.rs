@@ -72,6 +72,8 @@ fn report_json(report: &CheckReport) -> Value {
     Value::Object(top)
 }
 
+const SCHEDULE_UNAVAILABLE: &str = "E_SCHEDULE_INFEASIBLE: §11 A consumer that does not implement the bound library rejects the schedule; unimplemented: unpublished expansion library (§11.1)";
+
 fn load(path: &str) -> Result<Object> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| bennett_circuits::Error(format!("cannot read {path}: {e}")))?;
@@ -559,7 +561,10 @@ fn oracle_diagnostic(args: &[String], o: &Object, name: &str) -> Result<()> {
         match option.as_str() {
             "--suite" => {}
             "--exhaustive" | "--max-bits" => {
-                return Err(Error("unimplemented: §14.1 fixed-region/general-domain direct step-check options (milestone 6)".into()));
+                return Err(Error(
+                    "unimplemented: §14.1 fixed-region/general-domain direct step-check options"
+                        .into(),
+                ));
             }
             "--steps" => {
                 if steps.is_some() {
@@ -856,7 +861,7 @@ fn run_mode(args: &[String], draft: bool) -> Result<()> {
         )
         && load(&args[1])?.schedule.is_some()
     {
-        return Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: §11 A consumer that does not implement the bound library rejects the schedule; unimplemented: unpublished expansion library b-isa-spec-8r4 (milestone 3)".into()));
+        return Err(bennett_circuits::Error(SCHEDULE_UNAVAILABLE.into()));
     }
 
     if matches!(args.first().map(String::as_str), Some("run-cc" | "reverse")) && args.len() >= 3 {
@@ -893,49 +898,21 @@ fn run_mode(args: &[String], draft: bool) -> Result<()> {
         return oracle_diagnostic(args, &o, args[2].trim_start_matches('@'));
     }
     match args.first().map(String::as_str) {
-        Some("run-oracle"|"run-action") if args.len()>=3 => run_basis(args),
-        Some("run-program") if args.len()>=3 => {let o=load(&args[1])?;o.check()?;if args[3..].iter().any(|a|a=="--schedule"){return Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: unimplemented: §11 bound expansion library b-isa-spec-8r4 (milestone 3)".into()));}
-            if let Some(pos)=args.iter().position(|a|a=="--target"){let path=args.get(pos+1).ok_or_else(||bennett_circuits::Error("target path required".into()))?;let text=std::fs::read_to_string(path).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;bennett_circuits::target::Target::parse(&text)?;return Err(bennett_circuits::Error("unimplemented: §10 target-aware classical launch (milestone 6); use place/place-qasm for coherent regions".into()));}println!("{}",bennett_circuits::classical::launch(&o,args[2].trim_start_matches('@'),&args[3..])?.to_jcs());Ok(())},
-        Some("check-target") if args.len()==2 => {let text=std::fs::read_to_string(&args[1]).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;let t=bennett_circuits::target::Target::parse(&text)?;println!("{}",Value::Object(BTreeMap::from([("target_hash".into(),Value::Str(t.hash))])).to_jcs());Ok(())},
-        Some("place-qasm"|"place"|"place-frame") if args.len()>=4 => {
-            let o=load(&args[1])?;let text=std::fs::read_to_string(&args[3]).map_err(|e|bennett_circuits::Error(format!("target: {e}")))?;
-            let t=bennett_circuits::target::Target::parse(&text)?;
-            let opts=basis_options(&o,&args[4..])?;
-            if opts.input.is_some() || opts.muts.is_some() || opts.ins.is_some() || opts.basis.is_some() || !opts.memory.is_empty() || opts.adjoint {return Err(bennett_circuits::Error("unimplemented: placement input option (milestone 3)".into()));}
-            let name=args[2].trim_start_matches('@');
-            let p=if o.function(name).is_some_and(|f|f.kind==bennett_circuits::object::FnKind::Oracle){let budget=opts.budget.ok_or_else(||bennett_circuits::Error("oracle placement requires --budget (§5.4)".into()))?;bennett_circuits::placement::place_oracle_on_target(&o,name,budget,&opts.args,&t)?}else{if opts.budget.is_some(){return Err(bennett_circuits::Error("action budget supplied via --arg token (§5.4)".into()));}bennett_circuits::placement::place_on_target(&o,name,&opts.args,&t)?};
-            if args[0]=="place-frame" {println!("{}",bennett_circuits::frame::placed(&p,&o,draft)?.to_json());}else if args[0]=="place-qasm" {print!("{}",if draft {bennett_circuits::qasm::export_placed_draft(&p,&o)?}else{bennett_circuits::qasm::export_placed(&p)?});}else{println!("{}",if draft {p.annotations_draft(&o)?}else{p.annotations()?}.to_jcs());}Ok(())
-        },
-        Some("schedule") => Err(bennett_circuits::Error("E_SCHEDULE_INFEASIBLE: §11 A consumer that does not implement the bound library rejects the schedule; unimplemented: unpublished expansion library b-isa-spec-8r4 (milestone 3)".into())),
+        Some("run-oracle" | "run-action") if args.len() >= 3 => run_basis(args),
+        Some("run-program") if args.len() >= 3 => launch_program(args),
+
+        Some("check-target") if args.len() == 2 => check_target(args),
+
+        Some("place-qasm" | "place" | "place-frame") if args.len() >= 4 => place_region(args, draft),
+
+        Some("schedule") => Err(bennett_circuits::Error(SCHEDULE_UNAVAILABLE.into())),
 
         Some("check") if args.len() == 2 => {
             let report = load(&args[1])?.check()?;
             println!("{}", report_json(&report).to_jcs());
             Ok(())
         }
-        Some("export-qasm" | "export-qir" | "export-quil") if args.len() >= 3 => {
-            let obj = load(&args[1])?;
-            obj.check()?;
-            let mut budget=None;let mut arguments=Vec::new();let mut options=args[3..].iter();
-            while let Some(option)=options.next(){let value=options.next().ok_or_else(||bennett_circuits::Error(format!("export-qasm: {option} requires a value")))?;match option.as_str(){
-                "--budget"=>{if budget.is_some(){return Err(bennett_circuits::Error("export-qasm: repeated --budget".into()))}budget=Some(parse_budget(value,&obj,None)?);},
-                "--arg"=>{use bennett_circuits::oracle::Argument;let argument=if let Some(text)=value.strip_prefix("token:"){Argument::Token(parse_budget(text,&obj,budget)?)}else if let Some(text)=value.strip_prefix("f64:"){let v=text.parse::<f64>().map_err(|_|bennett_circuits::Error("export-qasm: invalid f64 argument".into()))?;if !v.is_finite(){return Err(bennett_circuits::Error("export-qasm: non-finite f64 argument (§3.1)".into()))}Argument::Float(v)}else if let Some(text)=value.strip_prefix("0x"){Argument::Integer(u128::from_str_radix(text,16).map_err(|_|bennett_circuits::Error("export-qasm: hexadecimal classical argument exceeds 128 bits".into()))?.to_string())}else{Argument::Integer(value.clone())};arguments.push(argument);},
-                _=>return Err(bennett_circuits::Error(format!("export-qasm: unknown option {option}")))
-            }}
-            let name=args[2].strip_prefix('@').unwrap_or(&args[2]);
-            let function=obj.function(name).ok_or_else(||bennett_circuits::Error(format!("export-qasm: unknown region @{name}")))?;
-            let p=if function.kind==bennett_circuits::object::FnKind::Oracle {
-                let budget=budget.ok_or_else(||bennett_circuits::Error("export-qasm: oracle entry requires --budget B[,heap,stack,depth]".into()))?;
-                bennett_circuits::oracle::specialise(&obj,name,budget,&arguments)?
-            }else {if budget.is_some(){return Err(bennett_circuits::Error("export-qasm: --budget requires an oracle entry; pass action tokens with --arg token:B,heap,stack,depth".into()))}bennett_circuits::lower::lower_program_with_args(&obj,name,&arguments)?};
-            let text = match args[0].as_str() {
-                "export-qir" => bennett_circuits::qir::export(&p)?,
-                "export-quil" => bennett_circuits::quil::export(&p)?,
-                _ => bennett_circuits::qasm::export(&p)?,
-            };
-            print!("{text}");
-            Ok(())
-        }
+        Some("export-qasm" | "export-qir" | "export-quil") if args.len() >= 3 => export_region(args),
         Some("hash") if args.len() == 2 => {
             let report = load(&args[1])?.hash()?;
             println!("{}", report_json(&report).to_jcs());
@@ -946,6 +923,190 @@ fn run_mode(args: &[String], draft: bool) -> Result<()> {
                 .into(),
         )),
     }
+}
+
+fn launch_program(args: &[String]) -> Result<()> {
+    let o = load(&args[1])?;
+    o.check()?;
+    if args[3..].iter().any(|a| a == "--schedule") {
+        return Err(bennett_circuits::Error(
+            "E_SCHEDULE_INFEASIBLE: unimplemented: §11 bound expansion library (§11.1)".into(),
+        ));
+    }
+
+    if let Some(pos) = args.iter().position(|a| a == "--target") {
+        let path = args
+            .get(pos + 1)
+            .ok_or_else(|| bennett_circuits::Error("target path required".into()))?;
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| bennett_circuits::Error(format!("target: {e}")))?;
+        bennett_circuits::target::Target::parse(&text)?;
+        return Err(bennett_circuits::Error("unimplemented: §10 target-aware classical launch; use place/place-qasm for coherent regions".into()));
+    }
+    println!(
+        "{}",
+        bennett_circuits::classical::launch(&o, args[2].trim_start_matches('@'), &args[3..])?
+            .to_jcs()
+    );
+    Ok(())
+}
+
+fn check_target(args: &[String]) -> Result<()> {
+    let text = std::fs::read_to_string(&args[1])
+        .map_err(|e| bennett_circuits::Error(format!("target: {e}")))?;
+    let t = bennett_circuits::target::Target::parse(&text)?;
+    println!(
+        "{}",
+        Value::Object(BTreeMap::from([("target_hash".into(), Value::Str(t.hash))])).to_jcs()
+    );
+    Ok(())
+}
+
+fn place_region(args: &[String], draft: bool) -> Result<()> {
+    let o = load(&args[1])?;
+    let text = std::fs::read_to_string(&args[3])
+        .map_err(|e| bennett_circuits::Error(format!("target: {e}")))?;
+    let t = bennett_circuits::target::Target::parse(&text)?;
+    let opts = basis_options(&o, &args[4..])?;
+    if opts.input.is_some()
+        || opts.muts.is_some()
+        || opts.ins.is_some()
+        || opts.basis.is_some()
+        || !opts.memory.is_empty()
+        || opts.adjoint
+    {
+        return Err(bennett_circuits::Error(
+            "unimplemented: placement input option".into(),
+        ));
+    }
+
+    let name = args[2].trim_start_matches('@');
+    let p = if o
+        .function(name)
+        .is_some_and(|f| f.kind == bennett_circuits::object::FnKind::Oracle)
+    {
+        let budget = opts.budget.ok_or_else(|| {
+            bennett_circuits::Error("oracle placement requires --budget (§5.4)".into())
+        })?;
+        bennett_circuits::placement::place_oracle_on_target(&o, name, budget, &opts.args, &t)?
+    } else {
+        if opts.budget.is_some() {
+            return Err(bennett_circuits::Error(
+                "action budget supplied via --arg token (§5.4)".into(),
+            ));
+        }
+        bennett_circuits::placement::place_on_target(&o, name, &opts.args, &t)?
+    };
+
+    if args[0] == "place-frame" {
+        println!(
+            "{}",
+            bennett_circuits::frame::placed(&p, &o, draft)?.to_json()
+        );
+    } else if args[0] == "place-qasm" {
+        print!(
+            "{}",
+            if draft {
+                bennett_circuits::qasm::export_placed_draft(&p, &o)?
+            } else {
+                bennett_circuits::qasm::export_placed(&p)?
+            }
+        );
+    } else {
+        println!(
+            "{}",
+            if draft {
+                p.annotations_draft(&o)?
+            } else {
+                p.annotations()?
+            }
+            .to_jcs()
+        );
+    }
+    Ok(())
+}
+
+fn export_region(args: &[String]) -> Result<()> {
+    let obj = load(&args[1])?;
+    obj.check()?;
+    let mut budget = None;
+    let mut arguments = Vec::new();
+    let mut options = args[3..].iter();
+    while let Some(option) = options.next() {
+        let value = options.next().ok_or_else(|| {
+            bennett_circuits::Error(format!("export-qasm: {option} requires a value"))
+        })?;
+        match option.as_str() {
+            "--budget" => {
+                if budget.is_some() {
+                    return Err(bennett_circuits::Error(
+                        "export-qasm: repeated --budget".into(),
+                    ));
+                }
+                budget = Some(parse_budget(value, &obj, None)?);
+            }
+            "--arg" => {
+                use bennett_circuits::oracle::Argument;
+                let argument = if let Some(text) = value.strip_prefix("token:") {
+                    Argument::Token(parse_budget(text, &obj, budget)?)
+                } else if let Some(text) = value.strip_prefix("f64:") {
+                    let v = text.parse::<f64>().map_err(|_| {
+                        bennett_circuits::Error("export-qasm: invalid f64 argument".into())
+                    })?;
+                    if !v.is_finite() {
+                        return Err(bennett_circuits::Error(
+                            "export-qasm: non-finite f64 argument (§3.1)".into(),
+                        ));
+                    }
+                    Argument::Float(v)
+                } else if let Some(text) = value.strip_prefix("0x") {
+                    Argument::Integer(
+                        u128::from_str_radix(text, 16)
+                            .map_err(|_| {
+                                bennett_circuits::Error(
+                                    "export-qasm: hexadecimal classical argument exceeds 128 bits"
+                                        .into(),
+                                )
+                            })?
+                            .to_string(),
+                    )
+                } else {
+                    Argument::Integer(value.clone())
+                };
+                arguments.push(argument);
+            }
+            _ => {
+                return Err(bennett_circuits::Error(format!(
+                    "export-qasm: unknown option {option}"
+                )));
+            }
+        }
+    }
+    let name = args[2].strip_prefix('@').unwrap_or(&args[2]);
+    let function = obj
+        .function(name)
+        .ok_or_else(|| bennett_circuits::Error(format!("export-qasm: unknown region @{name}")))?;
+    let p = if function.kind == bennett_circuits::object::FnKind::Oracle {
+        let budget = budget.ok_or_else(|| {
+            bennett_circuits::Error(
+                "export-qasm: oracle entry requires --budget B[,heap,stack,depth]".into(),
+            )
+        })?;
+        bennett_circuits::oracle::specialise(&obj, name, budget, &arguments)?
+    } else {
+        if budget.is_some() {
+            return Err(bennett_circuits::Error("export-qasm: --budget requires an oracle entry; pass action tokens with --arg token:B,heap,stack,depth".into()));
+        }
+        bennett_circuits::lower::lower_program_with_args(&obj, name, &arguments)?
+    };
+
+    let text = match args[0].as_str() {
+        "export-qir" => bennett_circuits::qir::export(&p)?,
+        "export-quil" => bennett_circuits::quil::export(&p)?,
+        _ => bennett_circuits::qasm::export(&p)?,
+    };
+    print!("{text}");
+    Ok(())
 }
 
 fn main() -> ExitCode {

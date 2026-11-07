@@ -8,8 +8,16 @@ timeout_s = 7200
 CARGO_TARGET_DIR = "{root}/.tmp/gate-target"
 
 [[check]]
+name = "quality baseline"
+argv = ["python3", "-I", "scripts/quality_metrics.py"]
+
+[[check]]
 name = "cargo test"
-argv = ["cargo", "test", "--offline"]
+argv = ["cargo", "test", "--offline", "-j3", "--", "--test-threads=4"]
+
+[[check]]
+name = "slow oracle differential (approximately 7 GB peak)"
+argv = ["cargo", "test", "--offline", "-j3", "--test", "oracles", "--", "--ignored", "--test-threads=1"]
 
 [siblings."bennett-isa-spec"]
 sha = "ecaaac060c44e317d1181345fa6b8e38c096c099"
