@@ -26,3 +26,22 @@ fn resolver_and_conformance_script_obey_pins() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn quality_ratchet_detects_growth_in_each_dimension() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = std::process::Command::new("python3")
+        .args([
+            "-I",
+            root.join("scripts/quality_metrics.py").to_str().unwrap(),
+            "--self-test",
+        ])
+        .output()
+        .expect("run quality metric regressions");
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

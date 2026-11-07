@@ -121,3 +121,115 @@ this job ownership. Removal is assigned to the orchestrator in
 `bennett-circuits-8n7`; the ratchet records that existing path and rejects any
 additional litter. Ignore rules cover pycache, bytecode, logs, Beads LOCK,
 backups and scratch progress. There are no tracked artifacts added by this job.
+
+## Quality ratchet
+
+`python3 -I scripts/quality_metrics.py --measure` records the baseline below.
+`python3 -I scripts/quality_metrics.py` is the single quality check in
+`gate.toml`; `--self-test` exercises lexical handling and a mutation for every
+ratcheted dimension, and runs during the default integration suite.
+
+Function lengths include source unit tests and nested named functions. The
+complexity mass is a lexical proxy: branch/loop/match/Boolean control tokens
+weighted by brace nesting inside functions (nested functions are counted in
+their enclosing body as well). It is deterministic, not a semantic cognitive
+complexity analysis. The gate rejects increases in non-short length buckets,
+per-file maximum length, per-file complexity mass, trivial forwarding wrappers,
+process identifiers or newly tracked litter paths. Useful short functions can
+be added. No universal numeric limit or coverage threshold is introduced;
+explicit baseline changes require reviewing the new measurement.
+
+Corresponding hygiene greps are `rg -n
+"bennett-circuits-[a-z0-9]{3}\b|b-isa-spec-[a-z0-9]{3}\b|milestone[ -][0-9]+"
+src` (zero matches) and `git ls-files | rg
+"(__pycache__|\.pyc$|\.log$|LOCK$|\.backup$|\.darc|LAST.RUN|PROGRESS)"`
+(one existing Beads hook backup; removal owner above). The script also detects
+job/shift/round labels and session dates. This is the repo's own baseline.
+
+<!-- quality-baseline -->
+```json
+{
+  "complexity_mass_per_file": {
+    "src/amplitude.rs": 78,
+    "src/borrow.rs": 87,
+    "src/certificate.rs": 584,
+    "src/checker.rs": 2923,
+    "src/classical.rs": 560,
+    "src/coverage.rs": 37,
+    "src/export.rs": 18,
+    "src/flatten.rs": 93,
+    "src/frame.rs": 151,
+    "src/history.rs": 756,
+    "src/ir.rs": 25,
+    "src/ir_codec.rs": 55,
+    "src/json.rs": 187,
+    "src/lib.rs": 0,
+    "src/linking.rs": 296,
+    "src/lower.rs": 460,
+    "src/main.rs": 409,
+    "src/metadata.rs": 478,
+    "src/object.rs": 868,
+    "src/oracle.rs": 525,
+    "src/placement.rs": 268,
+    "src/proof.rs": 80,
+    "src/qasm.rs": 137,
+    "src/qir.rs": 166,
+    "src/quil.rs": 43,
+    "src/selectors.rs": 61,
+    "src/sha256.rs": 1,
+    "src/simulation.rs": 94,
+    "src/step_check.rs": 239,
+    "src/target.rs": 438,
+    "src/translation.rs": 111
+  },
+  "length_distribution": {
+    "1-30": 400,
+    "101-300": 41,
+    "31-100": 131,
+    "over-300": 6
+  },
+  "longest_per_file": {
+    "src/amplitude.rs": 39,
+    "src/borrow.rs": 116,
+    "src/certificate.rs": 277,
+    "src/checker.rs": 481,
+    "src/classical.rs": 536,
+    "src/coverage.rs": 62,
+    "src/export.rs": 42,
+    "src/flatten.rs": 231,
+    "src/frame.rs": 126,
+    "src/history.rs": 280,
+    "src/ir.rs": 55,
+    "src/ir_codec.rs": 75,
+    "src/json.rs": 75,
+    "src/lib.rs": 3,
+    "src/linking.rs": 195,
+    "src/lower.rs": 259,
+    "src/main.rs": 254,
+    "src/metadata.rs": 269,
+    "src/object.rs": 139,
+    "src/oracle.rs": 460,
+    "src/placement.rs": 264,
+    "src/proof.rs": 76,
+    "src/qasm.rs": 96,
+    "src/qir.rs": 230,
+    "src/quil.rs": 74,
+    "src/selectors.rs": 56,
+    "src/sha256.rs": 15,
+    "src/simulation.rs": 70,
+    "src/step_check.rs": 260,
+    "src/target.rs": 268,
+    "src/translation.rs": 190
+  },
+  "process_identifiers": 0,
+  "tracked_litter": [
+    ".beads/hooks/pre-push.backup"
+  ],
+  "trivial_wrappers": 102
+}
+```
+
+Ratchet verification: all four self-tests passed. A temporary Git fixture also
+rejected an actual added branch (complexity 79 > 78), a source process identifier
+(1 > 0), and a newly tracked `trace.log`; the clean fixture passed. The three
+pin/ratchet integration tests passed in 1.57 s. Baseline check passes on this tree.
