@@ -1,7 +1,7 @@
 # Quality evidence
 
 Final default verification: **210 Rust tests passed**, three explicitly ignored
-(two slow oracle tests and one contract-dependent promised test), **8.22 s**
+(two slow oracle tests and one contract-dependent promised test), **8.41 s**
 wall time. Source line coverage: **85.15%**. The commands and limits are below.
 
 ## Contract audit
@@ -26,7 +26,7 @@ Further measurements and the quality baseline are recorded below as completed.
 
 `CARGO_TARGET_DIR=.tmp/quality-circuits/target /usr/bin/time -f
 "wall_seconds=%e peak_kb=%M" timeout 900 cargo test -j3 --
---test-threads=4` passed in **8.22 s**, peak **127272 KiB**, with existing
+--test-threads=4` passed in **8.41 s**, peak **128300 KiB**, with existing
 build artifacts. Test profile keeps optimisation, assertions and overflow
 checks, with line-table debug information. Two integration binaries replace
 15 independently linked binaries. Two large oracle tests are explicitly
@@ -143,9 +143,12 @@ process identifiers or newly tracked litter paths. Useful short functions can
 be added. No universal numeric limit or coverage threshold is introduced;
 explicit baseline changes require reviewing the new measurement.
 
-Signature scanning now balances parentheses, brackets, angle brackets and const
-expression braces before treating a semicolon as a declaration terminator;
-return arrows are distinct from closing angle brackets. The original measurement
+Signature scanning balances parentheses, brackets and const-expression braces
+before treating a semicolon as a declaration terminator. Angle brackets balance
+at the ungrouped type level; inside a group, its enclosing delimiter already
+protects nested types and expressions from body/declaration detection. Shifts,
+comparisons and compound shifts therefore cannot change generic nesting.
+Return arrows are distinct from closing angle brackets. The original measurement
 omitted three existing array-signature functions: `sha256::sha256` (68 lines,
 complexity mass 9) and `certificate::obj` / `classical::obj` (three lines and one
 forwarding wrapper each). The corrected baseline therefore changes the short
@@ -157,9 +160,16 @@ the ratchet comparisons are unchanged.
 An inventory-level regression adds 320 conditional lines to the real `sha256`
 function in memory. It failed before the scanner correction because
 `regressions()` returned an empty list; it now rejects both length-bucket and
-complexity growth. Seven paired signature/declaration cases cover arrays in
+complexity growth with both the original and shifted return signature. Eight
+paired signature/declaration controls cover arrays in
 arguments, returns, generic bounds, function pointers and const expressions,
-while keeping trait declarations excluded. Malformed signatures fail explicitly.
+including `fn typed<T: Ord>(x: [T; 4]) -> Vec<T>`. An additional generated table
+crosses shifts, comparisons, compound shifts and match arrows with twelve
+signature positions: **132 combinations**, each checked as both a definition
+and a trait declaration, with a following function to detect scope errors.
+Malformed signatures fail explicitly. The real SHA return-type mutation from
+`[u8; 32]` to `[u8; 1 << 5]` preserves the full inventory and passes the gate
+entry point. No baseline values or ratchet comparisons changed for this fix.
 
 Corresponding hygiene greps are `rg -n
 "bennett-circuits-[a-z0-9]{3}\b|b-isa-spec-[a-z0-9]{3}\b|milestone[ -][0-9]+"
@@ -252,8 +262,18 @@ job/shift/round labels and session dates. This is the repo's own baseline.
 ```
 
 Ratchet verification: `timeout 30 python3 -I scripts/quality_metrics.py
---self-test` passed all seven tests, and `timeout 30 python3 -I
-scripts/quality_metrics.py` passed the corrected baseline. A direct comparison
+--self-test` passed all ten tests, and `timeout 30 python3 -I
+scripts/quality_metrics.py` passed the corrected baseline. Before the operator
+fix, the expanded self-tests failed with 219 errors, including the review's
+shifted-array reproduction and the in-memory SHA inventory mutation.
+`timeout 30 rustc --edition=2021 -A warnings --crate-name operator_signatures
+--crate-type=lib --emit=metadata -o
+.tmp/quality-circuits/tmp/operator_signatures.rmeta -` accepted all 132 generated
+definitions and 132 declarations; the scanner found exactly the definitions.
+The complete SHA module with the shifted return type also compiled with
+`timeout 20 rustc --edition=2021 --crate-name sha_signature_probe --crate-type=lib
+--emit=metadata -o .tmp/quality-circuits/tmp/sha_signature_probe.rmeta -`.
+A direct comparison
 also confirmed that the recorded JSON equals the corrected inventory in every
 dimension. A temporary Git fixture from the initial verification also
 rejected an actual added branch (complexity 79 > 78), a source process identifier
@@ -273,7 +293,7 @@ semantic domains and are assigned to the orchestrator's separate gate run;
 this child did not run the full push or any consumer gate.
 
 Final `cargo fmt --check`, `timeout 180 cargo clippy --offline -j3 --all-targets
--- -D warnings`, `python3 -I scripts/quality_metrics.py`, its seven self-tests,
+-- -D warnings`, `python3 -I scripts/quality_metrics.py`, its ten self-tests,
 and `git diff --check` all pass. Code written in this change uses named phases,
 explicit errors, hand-derived/independent test expectations, one owner for the
 history state, and no process labels in product output. No sibling code was

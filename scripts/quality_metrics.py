@@ -41,6 +41,11 @@ def functions(text):
             if word == ';' and not delimiters:
                 start = None
                 break
+            # Grouped syntax already protects nested types and expressions
+            # from body/declaration detection. Only the ungrouped type level
+            # needs angle balancing; grouped < and > may be operators.
+            if word in '<>' and any(d in '([{' for d in delimiters):
+                continue
             if word in '([<{':
                 delimiters.append(word)
             elif word in CLOSING:
@@ -133,6 +138,7 @@ class MetricsTests(unittest.TestCase):
             'fn typed(input: fn() -> [u8; 32]) -> [u8; 32]',
             'fn typed<T: Fn() -> [u8; 32]>(input: T) -> [u8; 32]',
             'fn typed() -> [u8; { let n = 4; n }]',
+            'fn typed<T: Ord>(x: [T; 4]) -> Vec<T>',
         ]
         for signature in signatures:
             with self.subTest(signature=signature, kind='body'):
@@ -142,8 +148,65 @@ class MetricsTests(unittest.TestCase):
                 trait = 'trait Hash { ' + signature + '; fn forward() { other() } }'
                 self.assertEqual(list(functions(trait)), [('forward', 1, 0, 1)])
 
+    def test_shifted_return_array(self):
+        source = 'pub fn shifted() -> [u8; 1 << 5] { [0; 1 << 5] }'
+        self.assertEqual(list(functions(source)), [('shifted', 1, 0, 0)])
+
+    def test_const_operators_in_signature_positions(self):
+        expressions = {
+            '<<': '1usize << 5',
+            '>>': '64usize >> 1',
+            '<': '(1usize < 2) as usize',
+            '>': '(2usize > 1) as usize',
+            '<=': '(1usize <= 2) as usize',
+            '>=': '(2usize >= 1) as usize',
+            '==': '(1usize == 1) as usize',
+            '!=': '(1usize != 2) as usize',
+            '<<=': '{ let mut n = 1usize; n <<= 5; n }',
+            '>>=': '{ let mut n = 64usize; n >>= 1; n }',
+            '=>': 'match 1usize { 1 => 32, _ => 0 }',
+        }
+        signatures = [
+            'fn typed(x: [u8; EXPR])',
+            'fn typed() -> [u8; EXPR]',
+            'fn typed() -> Vec<[u8; EXPR]>',
+            'fn typed<T: Trait<[u8; EXPR]>>(x: T)',
+            'fn typed<T>(x: T) where T: Trait<[u8; EXPR]>',
+            'fn typed(x: fn() -> [u8; EXPR])',
+            'fn typed<T: Fn() -> [u8; EXPR]>(x: T)',
+            'fn typed() -> Bits<{ EXPR }>',
+            'fn typed(x: Bits<{ EXPR }>)',
+            'fn typed<T: Trait<Bits<{ EXPR }>>>(x: T)',
+            'fn typed() -> <Bits<{ EXPR }> as Trait<u8>>::Output',
+            "fn typed() -> for<'a> fn(&'a [u8; EXPR]) -> Vec<[u8; EXPR]>",
+        ]
+        for operator, expression in expressions.items():
+            for template in signatures:
+                signature = template.replace('EXPR', expression)
+                with self.subTest(operator=operator, signature=signature, kind='body'):
+                    source = signature + ' {\n if ready { work(); }\n}\nfn after() { other() }'
+                    self.assertEqual(list(functions(source)),
+                                     [('typed', 3, 1, 0), ('after', 1, 0, 1)])
+                with self.subTest(operator=operator, signature=signature, kind='declaration'):
+                    source = 'trait Hash { ' + signature + '; fn after() { other() } }'
+                    self.assertEqual(list(functions(source)), [('after', 1, 0, 1)])
+
+    def test_shifted_sha256_signature_preserves_inventory_and_gate(self):
+        path = ROOT / 'src/sha256.rs'
+        read_text = Path.read_text
+        source = read_text(path)
+        signature = '-> [u8; 32]'
+        self.assertIn(signature, source)
+        mutated = source.replace(signature, '-> [u8; 1 << 5]', 1)
+        baseline = inventory(ROOT)
+        with patch.object(Path, 'read_text', lambda p: mutated if p == path else read_text(p)):
+            self.assertEqual(inventory(ROOT), baseline)
+            with patch.object(sys, 'argv', ['quality_metrics.py']):
+                self.assertEqual(main(), 0)
+
     def test_malformed_signatures_fail_loudly(self):
-        for source in ['fn broken(x: [u8; 4) {}', 'fn broken(x: [u8; 4]']:
+        for source in ['fn broken(x: [u8; 4) {}', 'fn broken(x: [u8; 4]',
+                       'fn broken<T() {}', 'fn broken() -> Vec<T] {}']:
             with self.subTest(source=source):
                 with self.assertRaisesRegex(ValueError, 'signature.*broken'):
                     list(functions(source))
@@ -154,14 +217,16 @@ class MetricsTests(unittest.TestCase):
         source = read_text(path)
         insertion = '    let mut h:'
         self.assertIn(insertion, source)
-        mutated = source.replace(insertion, '    if data.is_empty() {}\n' * 320 + insertion, 1)
         baseline = inventory(ROOT)
-        with patch.object(Path, 'read_text', lambda p: mutated if p == path else read_text(p)):
-            current = inventory(ROOT)
-        errors = regressions(current, baseline)
-        self.assertTrue(errors, 'growth in the existing sha256 function must fail the ratchet')
-        self.assertIn('function length bucket over-300 increased', errors)
-        self.assertTrue(any('complexity_mass_per_file: src/sha256.rs:' in e for e in errors))
+        for signature in ['-> [u8; 32]', '-> [u8; 1 << 5]']:
+            with self.subTest(signature=signature):
+                mutated = source.replace('-> [u8; 32]', signature, 1)
+                mutated = mutated.replace(insertion, '    if data.is_empty() {}\n' * 320 + insertion, 1)
+                with patch.object(Path, 'read_text', lambda p: mutated if p == path else read_text(p)):
+                    current = inventory(ROOT)
+                errors = regressions(current, baseline)
+                self.assertIn('function length bucket over-300 increased', errors)
+                self.assertTrue(any('complexity_mass_per_file: src/sha256.rs:' in e for e in errors))
 
     def test_process_identifiers_exclude_published_format_names(self):
         self.assertFalse(PROCESS.search("bennett-circuits-placement-1"))
