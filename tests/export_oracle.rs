@@ -19,6 +19,23 @@ use std::{
 
 const COLLATZ: &str = include_str!("fixtures/export_oracle/collatz.bennett");
 const COMMIT_GATES: usize = 15;
+const CAPACITY_LIMITS: [(u64, u64); 13] = [
+    (0, 0),
+    (0, 1),
+    (27, 0),
+    (27, 1),
+    (28, 0),
+    (28, 1),
+    (28, 2),
+    (28, 3),
+    (28, 4),
+    (29, 0),
+    (29, 1),
+    (32, 0),
+    (32, 1),
+];
+// Call admission, the first return (8), and the first retval (9).
+const CAPACITY_STEPS: [u64; 6] = [0, 1, 7, 8, 9, 10];
 const BASELINE_PREFIX: [usize; 9] = [92_331, 71, 111, 56, 277, 110, 340, 111_006, 238_029];
 
 fn checked_collatz() -> Object {
@@ -399,8 +416,8 @@ fn collatz_legacy_counts_semantics_cleanup_and_involution() {
 #[test]
 fn collatz_call_capacity_boundaries_preserve_first_fault() {
     let obj = checked_collatz();
-    for (stack, depth) in [(27, 1), (28, 0), (28, 1)] {
-        for steps in [0, 1, 9] {
+    for (stack, depth) in CAPACITY_LIMITS {
+        for steps in CAPACITY_STEPS {
             let b = budget(steps, stack, depth);
             eprintln!("checking call capacity {b:?}");
             let p = Permutation::from_literal(legacy(&obj, b));
@@ -529,6 +546,22 @@ fn pinned_reference_adjudicates_collatz_row_and_capacity_boundaries() {
     let binary = sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref");
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/export_oracle/collatz.bennett");
+    let capacity_cases = CAPACITY_LIMITS.into_iter().flat_map(|(stack, depth)| {
+        CAPACITY_STEPS.into_iter().flat_map(move |steps| {
+            [0, 1, 2, 255].map(|x| {
+                let (code, executed) = if steps == 0 {
+                    (1, 0)
+                } else if stack < 28 || depth == 0 {
+                    (3, 1)
+                } else if x == 1 && steps >= 9 {
+                    (0, 9)
+                } else {
+                    (1, steps)
+                };
+                (x, steps, stack, depth, 0, code, executed)
+            })
+        })
+    });
     for (x, steps, stack, depth, payload, code, executed) in [
         (1, 8, 32, 32, 0, 1, 8),
         (1, 9, 32, 32, 0, 0, 9),
@@ -541,7 +574,10 @@ fn pinned_reference_adjudicates_collatz_row_and_capacity_boundaries() {
         (1, 1, 27, 1, 0, 3, 1),
         (1, 1, 28, 0, 0, 3, 1),
         (1, 9, 28, 1, 0, 0, 9),
-    ] {
+    ]
+    .into_iter()
+    .chain(capacity_cases)
+    {
         let out = Command::new(&binary)
             .args([
                 "run-oracle",

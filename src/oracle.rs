@@ -858,7 +858,7 @@ impl<'a> Machine<'a> {
                 bad = self.b.eq(&self.depth, &constant(0, self.depth.len()));
                 code = constant(4, self.code.len());
                 capture_flag!();
-                let cs = vec![at.clone(), not(&bad)];
+                let cs = vec![at.clone(), not(flag)]; // Old-state guard (§3.6/§3.7).
                 let stack = self.stack.clone();
                 next = resize(&self.array_read(&stack, &self.fp.clone(), self.cw), self.p);
                 self.b.copy(&next, succ, std::slice::from_ref(at));
@@ -877,7 +877,7 @@ impl<'a> Machine<'a> {
                         continue;
                     }
                     let eq = self.b.eq(&id, &constant(j as u128, self.cw));
-                    self.b.exchange(&slot, l, &[at.clone(), not(&bad), eq]);
+                    self.b.exchange(&slot, l, &[at.clone(), not(flag), eq]);
                 }
                 let idx = self.offset(&self.fp.clone(), 1);
                 let old_fp = self.array_read(&stack, &idx, self.cw);
