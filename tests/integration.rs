@@ -9,6 +9,8 @@ mod diagnostics;
 mod differential;
 #[path = "support/exact.rs"]
 mod exact;
+#[path = "export_oracle.rs"]
+mod export_oracle;
 #[path = "exporters.rs"]
 mod exporters;
 #[path = "support/fixtures.rs"]

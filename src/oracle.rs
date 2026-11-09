@@ -1170,9 +1170,17 @@ impl<'a> Machine<'a> {
 }
 /// Specialise one oracle with fixed classical arguments and budget. Interface
 /// order is target, fault, inputs, memory; all of D remains quantum input.
-pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -> Result<Program> {
+/// This literal construction is retained as the independent differential oracle.
+pub fn specialise_legacy(
+    obj: &Object,
+    name: &str,
+    budget: Budget,
+    args: &[Argument],
+) -> Result<Program> {
     Ok(specialise_impl(obj, name, budget, args, false, None)?.0)
 }
+/// The default entry currently uses the unchanged literal construction.
+pub use specialise_legacy as specialise;
 /// Diagnostic execution includes one output bit per active forward row. These
 /// observer bits are never part of an exported oracle's interface.
 pub(crate) fn specialise_probe(
