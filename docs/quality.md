@@ -210,7 +210,7 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
     "src/oracle_emit/machine.rs": 61,
     "src/oracle_emit/machine/rows.rs": 66,
     "src/oracle_emit/replay.rs": 26,
-    "src/oracle_emit/source.rs": 36,
+    "src/oracle_emit/source.rs": 38,
     "src/oracle_plan.rs": 4,
     "src/oracle_plan/flow.rs": 22,
     "src/oracle_plan/known.rs": 86,

@@ -2391,3 +2391,11 @@ fn engineered_recipe_resident_shape_is_independent_of_budget_doubling() {
     assert!(second.counts().history_wires > first.counts().history_wires);
     assert!(second.counts().full > first.counts().full);
 }
+
+#[test]
+fn engineered_unreachable_lprocs_do_not_enter_the_selected_closure() {
+    let object = plan_object(
+        "bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32\n\nsection symbols\n{}\n\nsection functions\noracle @small (x:wire[2] in) (t:wire[2]) (f:wire[4]) () ()\n^entry():\nlift.retval x\nlproc @unused (p:reg[2]) (r:reg[2]) () () ()\n^entry():\nlift.ret p\n\nsection layout\n{\"A_tab\":0,\"H\":12,\"S_cells\":0,\"globals\":{},\"heap_base\":4096,\"heap_limit_max\":0,\"interface_regions\":{\"small\":{}},\"null_size\":4096,\"ptr_width\":32}\n",
+    );
+    assert_small_recipes(&object, "small", budget(1, 0, 0), |x| (x, 0));
+}

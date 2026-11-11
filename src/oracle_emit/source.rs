@@ -99,7 +99,7 @@ impl Source {
             source.entries.entry(row.function.clone()).or_insert(row.pc);
         }
         for f in &obj.functions {
-            if f.kind == FnKind::Lproc {
+            if f.kind == FnKind::Lproc && source.entries.contains_key(&f.name) {
                 source.parameters.insert(
                     f.name.clone(),
                     f.groups[0]
