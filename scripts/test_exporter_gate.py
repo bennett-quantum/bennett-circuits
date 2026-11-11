@@ -85,6 +85,12 @@ if 'test' in sys.argv:
         self.assertTrue(any(name == 'cargo' and args[0] == 'test' for name, args in events))
 
 
+    def test_published_unavailable_is_not_relabelled_by_local_success(self):
+        result, events = self.run_gate(2, 0)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('Local exporter differential: PASS', result.stderr)
+        self.assertTrue(any(name == 'cargo' and args[0] == 'test' for name, args in events))
+
     def test_hang_guard_is_unknown_not_a_passing_differential(self):
         result, _ = self.run_gate(0, 0, EXPORT_SLEEP='2', BENNETT_EXPORTER_GUARD_S='0.1')
         self.assertEqual(result.returncode, 124, result.stderr)

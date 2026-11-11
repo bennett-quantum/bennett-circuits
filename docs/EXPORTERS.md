@@ -177,6 +177,12 @@ PASS/FAIL/UNKNOWN label go to stderr. A failed published F keeps its original
 exit priority; otherwise a local failure makes the combined command fail.
 Thus neither a passing source checker nor a passing exporter can hide the other
 failure. The local tests are consumer evidence, not new spec-owned F vectors.
+A published unavailable verdict also retains its original nonzero status; local
+success never relabels it as a source-conformance pass. At pin `ecaaac060c44`,
+F reports 33 PASS, 0 FAIL and four published staged UNAVAILABLE probes
+(`F-frame-live-ranges`, `F-frame-records-09`, `F-link-conflict`,
+`F-ratified-confirmations-09`). Probe/version adoption is separate work; the
+link-conflict staging text predates the consumer's existing link command.
 
 Local command hang guards are distinct from acceptance budgets. The exporter
 module has a 1200-second guard (`BENNETT_EXPORTER_GUARD_S` for an admitted host
