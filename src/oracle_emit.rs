@@ -5,7 +5,9 @@
 //! reconstructs the same numeric wire IDs without retaining the forward gates.
 mod bits;
 pub(crate) mod dispatch;
+mod loops;
 mod machine;
+pub use loops::LoopInfo;
 mod replay;
 mod source;
 use crate::{
@@ -64,8 +66,12 @@ pub struct Recipes {
     cycle: Vec<Layout>,
     commit: Layout,
     counts: Counts,
+    loop_plan: Option<loops::LoopPlan>,
 }
 impl Recipes {
+    pub fn loop_info(&self) -> Option<&LoopInfo> {
+        self.loop_plan.as_ref().map(|l| l.info())
+    }
     pub fn counts(&self) -> &Counts {
         &self.counts
     }
@@ -80,7 +86,9 @@ impl Recipes {
             .map_err(|_| Error("host limit: recipe wire count".into()))
     }
     pub fn forward_gates_at(&self, step: u64) -> usize {
-        self.layout(step).gates
+        self.loop_plan
+            .as_ref()
+            .map_or_else(|| self.layout(step).gates, |l| l.forward_gates_at(step))
     }
 }
 /// None selects the complete literal bounded machine for an unproved plan;
@@ -91,11 +99,44 @@ pub fn prepare(
     budget: Budget,
     args: &[Argument],
 ) -> Result<Option<Recipes>> {
+    prepare_impl(obj, name, budget, args, true)
+}
+/// Exact row recipes, retained as a differential oracle for loop specialization.
+pub fn prepare_step(
+    obj: &Object,
+    name: &str,
+    budget: Budget,
+    args: &[Argument],
+) -> Result<Option<Recipes>> {
+    prepare_impl(obj, name, budget, args, false)
+}
+fn prepare_impl(
+    obj: &Object,
+    name: &str,
+    budget: Budget,
+    args: &[Argument],
+    specialize_loops: bool,
+) -> Result<Option<Recipes>> {
     let plan = oracle_plan::analyze(obj, name, budget, args, &[], AnalysisOrder::Forward)?;
     if !source::eligible(&plan) || !obj.function(name).unwrap().groups[3].is_empty() {
         return Ok(None);
     }
     let source = source::Source::new(obj, &plan);
+    if specialize_loops {
+        if let Some((machine, loop_plan)) = loops::LoopPlan::prepare(&plan, &source) {
+            let counts = loop_plan.measure(&plan, &machine);
+            return Ok(Some(Recipes {
+                plan,
+                source,
+                machine,
+                prefix: vec![],
+                cycle: vec![],
+                commit: Layout::default(),
+                counts,
+                loop_plan: Some(loop_plan),
+            }));
+        }
+    }
     let machine = machine::Machine::new(&plan, &source);
     let mut recipe = Recipes {
         plan,
@@ -105,6 +146,7 @@ pub fn prepare(
         cycle: vec![],
         commit: Layout::default(),
         counts: Counts::default(),
+        loop_plan: None,
     };
     recipe.summarize()?;
     Ok(Some(recipe))

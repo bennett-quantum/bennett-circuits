@@ -103,6 +103,9 @@ impl Recipes {
     /// Visitor errors are propagated immediately; no truncated success receipt.
     pub fn visit(&self, mut visitor: impl FnMut(&Flip) -> Result<()>) -> Result<()> {
         self.wire_count()?;
+        if let Some(l) = &self.loop_plan {
+            return l.visit(&self.plan, &self.source, &self.machine, &mut visitor);
+        }
         let steps = self.plan.binding().budget.steps;
         for step in 0..steps {
             self.visit_layer(step, false, &mut visitor)?;
@@ -240,7 +243,7 @@ impl Recipes {
         )
     }
 }
-fn layout(b: &Build, start: usize) -> Layout {
+pub(super) fn layout(b: &Build, start: usize) -> Layout {
     let mut hist = BTreeMap::new();
     for gate in &b.gates {
         *hist.entry(gate.controls.len()).or_default() += 1;

@@ -204,12 +204,15 @@ Oracle analysis, replay and indexed streaming exporters have measured structure 
     "src/metadata.rs": 478,
     "src/object.rs": 868,
     "src/oracle.rs": 531,
-    "src/oracle_emit.rs": 2,
+    "src/oracle_emit.rs": 6,
     "src/oracle_emit/bits.rs": 80,
     "src/oracle_emit/dispatch.rs": 0,
+    "src/oracle_emit/loops.rs": 32,
+    "src/oracle_emit/loops/eval.rs": 71,
+    "src/oracle_emit/loops/proof.rs": 82,
     "src/oracle_emit/machine.rs": 61,
     "src/oracle_emit/machine/rows.rs": 66,
-    "src/oracle_emit/replay.rs": 26,
+    "src/oracle_emit/replay.rs": 27,
     "src/oracle_emit/source.rs": 38,
     "src/oracle_plan.rs": 4,
     "src/oracle_plan/flow.rs": 22,
@@ -237,9 +240,9 @@ Oracle analysis, replay and indexed streaming exporters have measured structure 
     "src/translation.rs": 111
   },
   "length_distribution": {
-    "1-30": 541,
-    "101-300": 42,
-    "31-100": 175,
+    "1-30": 562,
+    "101-300": 43,
+    "31-100": 184,
     "over-300": 6
   },
   "longest_per_file": {
@@ -263,9 +266,12 @@ Oracle analysis, replay and indexed streaming exporters have measured structure 
     "src/metadata.rs": 269,
     "src/object.rs": 139,
     "src/oracle.rs": 460,
-    "src/oracle_emit.rs": 24,
+    "src/oracle_emit.rs": 41,
     "src/oracle_emit/bits.rs": 29,
     "src/oracle_emit/dispatch.rs": 5,
+    "src/oracle_emit/loops.rs": 44,
+    "src/oracle_emit/loops/eval.rs": 83,
+    "src/oracle_emit/loops/proof.rs": 132,
     "src/oracle_emit/machine.rs": 44,
     "src/oracle_emit/machine/rows.rs": 77,
     "src/oracle_emit/replay.rs": 58,
@@ -299,7 +305,7 @@ Oracle analysis, replay and indexed streaming exporters have measured structure 
   "tracked_litter": [
     ".beads/hooks/pre-push.backup"
   ],
-  "trivial_wrappers": 124
+  "trivial_wrappers": 129
 }
 ```
 

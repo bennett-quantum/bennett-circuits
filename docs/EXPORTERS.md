@@ -92,6 +92,62 @@ writer gate beside the recipe layer and exclude a caller-owned legacy Program.
 Quantum workspace/history widths are separate metrics. The test host memory
 limit is a representation guard, never an ISA oracle budget or a time threshold.
 
+## Proved natural-loop recipes
+
+The default oracle constructor recognizes a single natural loop in the
+context-expanded CFG: the header dominates the cycle, the body and continuing
+arm are straight total paths, and the other arm reaches one terminal outcome.
+It computes live loop-carried words from reads before writes. Prefix paths and
+static call/return contexts preserve initialization and entry/exit charges.
+Names, fixture identities and arithmetic constants are not recognition keys.
+A bounded proof search selects the exact row construction when it cannot prove
+this shape. Calls in the cycle, conditional faults, memory, recursion and
+unproved control flow keep the existing exact construction. In particular,
+a fault in an incomplete iteration is never discarded.
+
+Each iteration snapshots only carried words, evaluates internal expressions as
+immutable SSA aliases, updates the carried state in parallel, and retains the
+active decision. The first terminal outcome freezes coherently. Forward
+recipes, output XOR and exact inverse recipes restore every private wire.
+The compiler unrolls only terminal opportunities whose original row charges
+fit the budget; it emits ordinary gates, with no quantum loop or iteration
+budget. `oracle_emit::prepare_step` explicitly retains exact row recipes for
+differential checks; `oracle::specialise_legacy` remains independent.
+
+The Collatz proof has 8 entry rows, 18 continuing rows and 20 exiting rows.
+At B=2048 there are 113 possible exiting iterations, irrespective of the
+mathematical stopping time. Actual forward costs are 24 entry gates and
+1,259 per iteration; output XOR is 13 gates. Thus forward is 142,291 and
+full forward/commit/inverse is **284,595**, within the 400,000 gate ceiling.
+Steady gates per original row change from 239.5 to 1,259/18 = 69.9444 forward,
+and from 479 to 139.8889 including reversal. These are expanded logical counts,
+not elapsed acceptance or gate-definition compression.
+
+At this budget the full histogram is G1=195,523 and G2=89,072, maximum two
+controls. The retained history has 88,267 wires, with 88,353 private wires in
+total. Three recipe descriptors and at most 1,259 resident recipe gates
+(1,260 including the writer transient) suffice at every tested budget, including
+doubling. The CLI representation guard retains B=2048 and also checks B=8192
+under the same 128 MiB address-space cap, so reduced gate counts cannot conceal
+a newly materialized whole-oracle array.
+
+For an explicit decomposition comparison, use X/CX/CCX and the exact clean
+AND-chain implementation of a c-control X: 2c-3 CCX for c>=3, with c-2 clean
+ancillas restored. The previous B=2048 histogram (G1=240,397, G2=728,440,
+G6=9,090) then gives 810,250 CCX and 240,397 CX, needing four extra clean
+ancillas. The loop histogram gives 89,072 CCX and 195,523 CX, with no such
+extra ancillas. These are costs derived from the stated decomposition and
+measured histograms; no hardware T-count is claimed. Inherited controls add
+to arity: the mixed two-control acceptance exercises maximum arity four,
+nonzero outputs, inactive calls and untouched external state.
+
+Non-ignored normal tests cover every cutoff 0..65 against exact row recipes
+(270,336 input/output tuples per construction), pinned-reference and real
+streamed-CLI boundary matrices, exhaustive tiny parallel-alias and wrap cases,
+root headers, both exit polarities, partial-iteration faults and inherited
+controls. Literal small-budget differential and the existing general corpus
+remain required. The normal harness discovery audit includes the loop cases.
+
 ## QIR
 
 The output is unrestricted QIR 1.0 using typed `%Qubit*` handles with consecutive
@@ -190,8 +246,9 @@ profile); a timeout or interruption is UNKNOWN and exits nonzero. Gate-run
 commands retain the repository's configured 7200-second guard and admission
 policy. These protect a host from a hang; they never change original source-row
 charges, gate ceilings or the oracle input domain. Keep resource admission and
-host-quiet holds outside the conformance command. Stage 6's loop target remains
-separate acceptance; passing the step exporter does not claim the loop target.
+host-quiet holds outside the conformance command. Loop equivalence and the
+400,000-gate B=2048 ceiling are separate normal acceptance assertions; passing
+the step exporter alone does not claim the loop target.
 
 
 | Verification class | Existing command owner | Work acceptance | Hang protection |

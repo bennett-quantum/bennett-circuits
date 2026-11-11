@@ -452,7 +452,11 @@ fn collatz_cli_zero_budget_executes_without_ir_metadata() {
         .collect::<Vec<_>>()
         .join("\n");
     let parsed = Permutation::from_flat(qasm::parse_flat(&executable).unwrap()).unwrap();
-    assert_eq!(parsed.flips.len(), COMMIT_GATES);
+    let recipes =
+        bennett_circuits::oracle_emit::prepare(&checked_collatz(), "ref", budget(0, 32, 32), &[])
+            .unwrap()
+            .unwrap();
+    assert_eq!(parsed.flips.len() as u128, recipes.counts().full);
     parsed.check_xor_outputs(0..12).unwrap();
     assert_tuples(&parsed, &collatz_tuples(budget(0, 32, 32)));
 }
@@ -2669,31 +2673,394 @@ fn streamed_cli_resident_limit_excludes_a_materialized_budget_gate_array() {
     let fixture = root.join("tests/fixtures/export_oracle/collatz.bennett");
     // A host representation guard, not an oracle budget or elapsed acceptance.
     let script = "import os,resource,sys; resource.setrlimit(resource.RLIMIT_CORE,(0,0)); resource.setrlimit(resource.RLIMIT_AS,(128*1024*1024,128*1024*1024)); os.execv(sys.argv[1],sys.argv[1:])";
-    let output = Command::new("python3")
-        .args([
-            "-c",
-            script,
-            env!("CARGO_BIN_EXE_bennett-circuits"),
-            "export-qasm",
-            fixture.to_str().unwrap(),
-            "ref",
-            "--budget",
-            "2048,0,32,32",
-            "--output",
-            destination.to_str().unwrap(),
-        ])
-        .output()
+    for (steps, ceiling) in [(2048, 400_000), (8192, 1_600_000)] {
+        let output = Command::new("python3")
+            .args([
+                "-c",
+                script,
+                env!("CARGO_BIN_EXE_bennett-circuits"),
+                "export-qasm",
+                fixture.to_str().unwrap(),
+                "ref",
+                "--budget",
+                &format!("{steps},0,32,32"),
+                "--output",
+                destination.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        let parsed = qasm::visit_stream_checked(
+            std::io::BufReader::new(std::fs::File::open(&destination).unwrap()),
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert!(
+            parsed.gates <= ceiling,
+            "loop CLI actual gates {}",
+            parsed.gates
+        );
+    }
+}
+
+#[test]
+fn looped_collatz_meets_actual_full_gate_envelope() {
+    let object = checked_collatz();
+    let recipes = bennett_circuits::oracle_emit::prepare(&object, "ref", budget(2048, 32, 32), &[])
+        .unwrap()
+        .unwrap();
+    let mut gates = 0u128;
+    recipes
+        .visit(|_| {
+            gates += 1;
+            Ok(())
+        })
         .unwrap();
     assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        gates <= 400_000,
+        "actual loop envelope failed: {gates} >400000"
     );
-    assert!(output.stdout.is_empty());
-    let parsed = qasm::visit_stream_checked(
-        std::io::BufReader::new(std::fs::File::open(destination).unwrap()),
-        |_| Ok(()),
+}
+
+#[test]
+fn looped_collatz_proves_original_charges_and_preserves_step_characterization() {
+    use bennett_circuits::oracle_emit::{prepare, prepare_step};
+    let object = checked_collatz();
+    for steps in [0, 1, 8, 9, 10, 27, 28, 29, 45, 46, 47, 2048, 4096] {
+        let b = budget(steps, 32, 32);
+        let recipes = prepare(&object, "ref", b, &[]).unwrap().unwrap();
+        let info = recipes.loop_info().expect("proved natural loop");
+        assert_eq!(
+            (
+                info.header,
+                info.entry_rows,
+                info.continue_rows,
+                info.exit_rows
+            ),
+            (12, 8, 18, 20)
+        );
+        assert_eq!(info.iterations, steps.saturating_sub(10) / 18);
+        let live = info
+            .live_locations
+            .iter()
+            .map(|id| {
+                let l = &recipes.plan().locations()[*id];
+                (l.name.as_str(), l.width)
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(live, BTreeSet::from([("v2", 8), ("v3", 64)]));
+        let row = prepare_step(&object, "ref", b, &[]).unwrap().unwrap();
+        assert!(row.loop_info().is_none());
+        if steps == 2048 {
+            assert_eq!(
+                (row.counts().forward, row.counts().commit, row.counts().full),
+                (488_956, 15, 977_927)
+            );
+            let one = recipes.forward_gates_at(27);
+            eprintln!(
+                "LOOP iteration_forward={one} forward_per_original_row={} full_per_original_row={} forward={} commit={} full={} history={} qubits={} peak={} descriptors={} histogram={:?}",
+                one as f64 / 18.0,
+                2.0 * one as f64 / 18.0,
+                recipes.counts().forward,
+                recipes.counts().commit,
+                recipes.counts().full,
+                recipes.counts().history_wires,
+                recipes.counts().qubits,
+                recipes.counts().peak_gate_objects,
+                recipes.counts().layer_descriptors,
+                recipes.counts().histogram
+            );
+            assert_eq!(recipes.counts().layer_descriptors, 3);
+            assert_eq!(
+                recipes.counts().forward,
+                recipes.forward_gates_at(0) as u128 + 113 * one as u128
+            );
+        }
+    }
+}
+
+#[test]
+fn looped_collatz_every_residual_prefix_matches_exact_step_recipes() {
+    use bennett_circuits::oracle_emit::{prepare, prepare_step};
+    let object = checked_collatz();
+    // Includes each possible partial continuation/exit prefix twice, and both
+    // sides of the direct return. No assumed mathematical Collatz bound.
+    for steps in 0..=65 {
+        let b = budget(steps, 32, 32);
+        let loops = prepare(&object, "ref", b, &[]).unwrap().unwrap();
+        let rows = prepare_step(&object, "ref", b, &[]).unwrap().unwrap();
+        let mut tuples = vec![];
+        for x in 0..256u64 {
+            let mut value = x;
+            let mut payload = 0;
+            let mut code = 1;
+            if x == 1 && steps >= 9 {
+                code = 0;
+            } else {
+                for j in 1..=steps.saturating_sub(10) / 18 {
+                    value = if value & 1 == 0 {
+                        value >> 1
+                    } else {
+                        value.wrapping_mul(3).wrapping_add(1)
+                    };
+                    if value == 1 {
+                        payload = j & 255;
+                        code = 0;
+                        break;
+                    }
+                }
+            }
+            for (target, fault) in collatz_probes() {
+                tuples.push((
+                    target | (fault << 8) | (x << 12),
+                    (target ^ payload) | ((fault ^ code) << 8) | (x << 12),
+                ));
+            }
+        }
+        assert_recipe_tuples(&loops, &tuples);
+        assert_recipe_tuples(&rows, &tuples);
+    }
+    eprintln!(
+        "loop/step exact original-row residuals: 66 budgets x256 inputs x16 outputs =270336 tuples, both constructions, zero divergences"
+    );
+}
+
+#[test]
+fn looped_small_state_parallel_aliases_and_first_outcome_exhaust_entire_abi() {
+    use bennett_circuits::oracle_emit::prepare;
+    // A cyclic two-bit counter, simultaneous swap aliases and
+    // an invariant input. This is deliberately not the Collatz shape/name.
+    let object = small_recipe_object(
+        "a:reg[2], b:reg[2], one:reg[2], next:reg[2], yes:reg[1]",
+        r#"one = lift.const.i2 1
+b = lift.mov x
+qjump ^loop
+^loop():
+next = lift.add a one
+yes = lift.icmp.eq next x
+qbranch yes ^done ^more
+^more():
+(a, b) = lift.parmov (next, a)
+qjump ^loop
+^done():
+lift.retval b"#,
+        "x:wire[2] in",
+    );
+    for steps in 0..=36 {
+        let b = budget(steps, 0, 0);
+        let recipes = prepare(&object, "small", b, &[]).unwrap().unwrap();
+        assert!(recipes.loop_info().is_some());
+        let info = recipes.loop_info().unwrap();
+        assert_eq!(
+            (info.entry_rows, info.continue_rows, info.exit_rows),
+            (3, 5, 4)
+        );
+        assert_small_recipes(&object, "small", b, |x| {
+            let j = if x == 0 { 4 } else { x };
+            if steps < 3 + 4 + (j - 1) * 5 {
+                (0, 1)
+            } else {
+                (if j == 1 { x } else { (j - 2) & 3 }, 0)
+            }
+        });
+        if steps <= 10 {
+            let literal =
+                Permutation::from_literal(specialise_legacy(&object, "small", b, &[]).unwrap());
+            let optimized = Permutation::from_literal(recipes.to_program().unwrap());
+            let tuples = (0..256u64)
+                .map(|input| {
+                    let mut output = packed(&literal, &[input]);
+                    literal.apply(&mut output);
+                    let value = output
+                        .iter()
+                        .take(literal.interface)
+                        .enumerate()
+                        .fold(0, |v, (i, word)| v | ((word & 1) << i));
+                    assert!(output[literal.interface..].iter().all(|word| word & 1 == 0));
+                    (input, value)
+                })
+                .collect::<Vec<_>>();
+            assert_tuples(&optimized, &tuples);
+        }
+    }
+}
+
+#[test]
+fn looped_partial_faults_keep_exact_row_machine_and_first_fault() {
+    use bennett_circuits::oracle_emit::prepare;
+    let object = small_recipe_object(
+        "a:reg[2], one:reg[2], next:reg[2], yes:reg[1]",
+        r#"one = lift.const.i2 1
+qjump ^loop
+^loop():
+next = lift.add a one
+yes = lift.icmp.eq next x
+lift.faultif yes 7
+qbranch yes ^done ^more
+^more():
+a = lift.mov next
+qjump ^loop
+^done():
+lift.retval next"#,
+        "x:wire[2] in",
+    );
+    for steps in 0..=30 {
+        let b = budget(steps, 0, 0);
+        let r = prepare(&object, "small", b, &[]).unwrap().unwrap();
+        assert!(
+            r.loop_info().is_none(),
+            "fault in a partial iteration must stay exact"
+        );
+        assert_small_recipes(&object, "small", b, |x| {
+            let j = if x == 0 { 4 } else { x };
+            (0, if steps >= 5 + (j - 1) * 6 { 7 } else { 1 })
+        });
+        if steps <= 9 {
+            let literal =
+                Permutation::from_literal(specialise_legacy(&object, "small", b, &[]).unwrap());
+            let tuples = (0..256u64)
+                .map(|v| {
+                    let x = v >> 6;
+                    let j = if x == 0 { 4 } else { x };
+                    let code = if steps >= 5 + (j - 1) * 6 { 7 } else { 1 };
+                    (v, v ^ (code << 2))
+                })
+                .collect::<Vec<_>>();
+            assert_tuples(&literal, &tuples);
+        }
+    }
+}
+
+#[test]
+fn looped_root_header_and_false_exit_preserve_zero_initialization_and_wrap() {
+    use bennett_circuits::oracle_emit::prepare;
+    let object = small_recipe_object(
+        "a:reg[2], one:reg[2], next:reg[2], yes:reg[1]",
+        r#"one = lift.const.i2 1
+next = lift.add a one
+a = lift.mov next
+yes = lift.icmp.ne next x
+qbranch yes ^more ^done
+^more():
+qjump ^entry
+^done():
+lift.retval a"#,
+        "x:wire[2] in",
+    );
+    for steps in 0..=36 {
+        let r = prepare(&object, "small", budget(steps, 0, 0), &[])
+            .unwrap()
+            .unwrap();
+        let info = r.loop_info().expect("root natural loop");
+        assert_eq!(
+            (
+                info.header,
+                info.entry_rows,
+                info.continue_rows,
+                info.exit_rows
+            ),
+            (0, 0, 6, 6)
+        );
+        assert_small_recipes(&object, "small", budget(steps, 0, 0), |x| {
+            let j = if x == 0 { 4 } else { x };
+            if steps >= 6 * j { (x, 0) } else { (0, 1) }
+        });
+    }
+}
+
+#[test]
+fn looped_mixed_inherited_controls_preserve_external_unknown_state() {
+    use bennett_circuits::ir::{Bundle, Circuit, Ctrl, Role};
+    let object = small_recipe_object(
+        "a:reg[2], one:reg[2], next:reg[2], yes:reg[1]",
+        r#"one = lift.const.i2 1
+next = lift.add a one
+a = lift.mov next
+yes = lift.icmp.ne next x
+qbranch yes ^more ^done
+^more():
+qjump ^entry
+^done():
+lift.retval a"#,
+        "x:wire[2] in",
+    );
+    let recipes = bennett_circuits::oracle_emit::prepare(&object, "small", budget(36, 0, 0), &[])
+        .unwrap()
+        .unwrap();
+    assert!(recipes.loop_info().is_some());
+    let mut program = recipes.to_program().unwrap();
+    let mut inputs = program.circuits[0].in_bundles.clone();
+    inputs.extend([
+        Bundle {
+            name: "control".into(),
+            width: 2,
+            role: Role::In,
+        },
+        Bundle {
+            name: "outside".into(),
+            width: 1,
+            role: Role::In,
+        },
+    ]);
+    program.circuits.insert(
+        0,
+        Circuit {
+            name: "controlled".into(),
+            perm: true,
+            mut_bundles: program.circuits[0].mut_bundles.clone(),
+            in_bundles: inputs,
+            mem: vec![],
+            workspace: vec![],
+            local_regions: vec![],
+            body: vec![Node::Call {
+                callee: "small".into(),
+                adjoint: false,
+                controls: vec![
+                    Ctrl {
+                        qubit: QubitRef::new("control", 0),
+                        positive: true,
+                    },
+                    Ctrl {
+                        qubit: QubitRef::new("control", 1),
+                        positive: false,
+                    },
+                ],
+                args: vec!["t".into(), "f".into(), "x".into()],
+            }],
+        },
+    );
+    program.top = "controlled".into();
+    let text = qasm::export(&program).unwrap();
+    let flat = qasm::parse_flat(
+        &text
+            .lines()
+            .filter(|l| !l.starts_with("// bc:"))
+            .collect::<Vec<_>>()
+            .join("\n"),
     )
     .unwrap();
-    assert_eq!(parsed.gates, 977_927);
+    let executable = Permutation::from_flat(flat).unwrap();
+    executable.check_xor_outputs(0..6).unwrap();
+    let tuples = (0..2048u64)
+        .map(|v| {
+            (
+                v,
+                if (v >> 8) & 3 == 1 {
+                    v ^ ((v >> 6) & 3)
+                } else {
+                    v
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_tuples(&executable, &tuples);
+    assert_eq!(
+        executable.flips.iter().map(|f| f.controls.len()).max(),
+        Some(recipes.counts().max_controls + 2)
+    );
 }

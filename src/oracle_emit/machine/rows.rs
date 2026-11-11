@@ -281,7 +281,7 @@ impl Machine {
         }
     }
 }
-fn compare(b: &mut Build, a: &Word, c: &Word, predicate: &str) -> Bit {
+pub(in crate::oracle_emit) fn compare(b: &mut Build, a: &Word, c: &Word, predicate: &str) -> Bit {
     if predicate == "eq" {
         return b.eq(a, c);
     }
