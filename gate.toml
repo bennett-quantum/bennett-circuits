@@ -1,8 +1,12 @@
 # Push-gate pins (bennett/tools/gate_README.md). Siblings resolve only to these commits.
 schema = 1
 repo = "bennett-circuits"
-tool_sha = "3779522887ace6426f8ba13fb0d55b625b781941"
+tool_sha = "822aaeffab369114e1a719a7b887a0192b22d386"
 timeout_s = 7200
+
+# Paths no check reads; changing only these reuses a PASS receipt (bennett/tools/gate_README.md).
+[receipt]
+non_product = [".beads/", "worklog/"]
 
 [env]
 CARGO_TARGET_DIR = "{root}/.tmp/gate-target"
@@ -17,6 +21,7 @@ argv = ["cargo", "test", "--offline", "-j3", "--", "--test-threads=4"]
 
 [[check]]
 name = "slow oracle differential (approximately 7 GB peak)"
+tier = "post-merge"  # long tail: main-health runs --tier full after landing
 argv = ["cargo", "test", "--offline", "-j3", "--test", "oracles", "--", "--ignored", "--test-threads=1"]
 
 [siblings."bennett-isa-spec"]
