@@ -179,7 +179,7 @@ src` (zero matches) and `git ls-files | rg
 job/shift/round labels and session dates. This is the repo's own baseline.
 
 <!-- quality-baseline -->
-Oracle analysis and replay modules have measured structure entries. The dispatch and source-validation additions are included in their owning modules' entries.
+Oracle analysis, replay and indexed streaming exporters have measured structure entries. Scoped dispatch, validation, metadata and output additions are included in their owning modules' entries.
 
 ```json
 {
@@ -190,17 +190,17 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
     "src/checker.rs": 2923,
     "src/classical.rs": 560,
     "src/coverage.rs": 37,
-    "src/export.rs": 18,
+    "src/export.rs": 24,
     "src/flatten.rs": 93,
     "src/frame.rs": 151,
     "src/history.rs": 756,
     "src/ir.rs": 25,
-    "src/ir_codec.rs": 55,
+    "src/ir_codec.rs": 61,
     "src/json.rs": 187,
     "src/lib.rs": 0,
     "src/linking.rs": 296,
     "src/lower.rs": 460,
-    "src/main.rs": 409,
+    "src/main.rs": 420,
     "src/metadata.rs": 478,
     "src/object.rs": 868,
     "src/oracle.rs": 531,
@@ -220,7 +220,13 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
     "src/oracle_plan/transfer/effects.rs": 22,
     "src/placement.rs": 268,
     "src/proof.rs": 80,
-    "src/qasm.rs": 137,
+    "src/qasm.rs": 102,
+    "src/qasm/legacy.rs": 36,
+    "src/qasm/local.rs": 46,
+    "src/qasm/stream.rs": 12,
+    "src/qasm/stream/digest.rs": 0,
+    "src/qasm/stream/metadata.rs": 64,
+    "src/qasm/stream/reader.rs": 72,
     "src/qir.rs": 166,
     "src/quil.rs": 43,
     "src/selectors.rs": 61,
@@ -231,9 +237,9 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
     "src/translation.rs": 111
   },
   "length_distribution": {
-    "1-30": 506,
-    "101-300": 41,
-    "31-100": 160,
+    "1-30": 541,
+    "101-300": 42,
+    "31-100": 175,
     "over-300": 6
   },
   "longest_per_file": {
@@ -262,7 +268,7 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
     "src/oracle_emit/dispatch.rs": 5,
     "src/oracle_emit/machine.rs": 44,
     "src/oracle_emit/machine/rows.rs": 77,
-    "src/oracle_emit/replay.rs": 64,
+    "src/oracle_emit/replay.rs": 58,
     "src/oracle_emit/source.rs": 42,
     "src/oracle_plan.rs": 36,
     "src/oracle_plan/flow.rs": 51,
@@ -274,6 +280,12 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
     "src/placement.rs": 264,
     "src/proof.rs": 76,
     "src/qasm.rs": 96,
+    "src/qasm/legacy.rs": 50,
+    "src/qasm/local.rs": 62,
+    "src/qasm/stream.rs": 72,
+    "src/qasm/stream/digest.rs": 16,
+    "src/qasm/stream/metadata.rs": 71,
+    "src/qasm/stream/reader.rs": 82,
     "src/qir.rs": 230,
     "src/quil.rs": 74,
     "src/selectors.rs": 56,
@@ -287,7 +299,7 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
   "tracked_litter": [
     ".beads/hooks/pre-push.backup"
   ],
-  "trivial_wrappers": 113
+  "trivial_wrappers": 124
 }
 ```
 

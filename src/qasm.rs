@@ -5,41 +5,14 @@
 //! `parse_flat` independently reads executable text, ignoring IR metadata.
 use crate::{
     Error, Result, bail,
-    flatten::{Flat, FlatGate, flatten},
+    flatten::{Flat, FlatGate},
     ir::*,
     ir_codec,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-fn one(c: &Circuit, body: Vec<Node>) -> Program {
-    let mut c = c.clone();
-    c.body = body;
-    Program {
-        top: c.name.clone(),
-        circuits: vec![c],
-    }
-}
 fn ident(i: usize) -> String {
     format!("bc{i}")
-}
-fn wire_map(c: &Circuit) -> BTreeMap<String, Vec<usize>> {
-    let mut out = BTreeMap::new();
-    let mut next = 0;
-    for (n, w) in c.interface_bundles().into_iter().chain(
-        c.workspace
-            .iter()
-            .map(|w| (w.name.clone(), u64::from(w.width))),
-    ) {
-        out.insert(n, (next..next + w as usize).collect());
-        next += w as usize;
-    }
-    out
-}
-fn wr(map: &BTreeMap<String, Vec<usize>>, q: &QubitRef) -> Result<usize> {
-    map.get(&q.bundle)
-        .and_then(|x| x.get(q.index as usize))
-        .copied()
-        .ok_or_else(|| Error(format!("QASM: unknown wire {q:?}")))
 }
 fn invocation(name: &str, cs: &[(usize, bool)], args: &[usize], adj: bool) -> String {
     let mut s = String::from("  ");
@@ -62,124 +35,39 @@ fn invocation(name: &str, cs: &[(usize, bool)], args: &[usize], adj: bool) -> St
     s.push_str(";\n");
     s
 }
-fn order<'a>(
-    p: &'a Program,
-    c: &'a Circuit,
-    active: &mut BTreeSet<String>,
-    seen: &mut BTreeSet<String>,
-    out: &mut Vec<&'a Circuit>,
-) -> Result<()> {
-    if active.contains(&c.name) {
-        bail!("QASM: call cycle at {}", c.name);
-    }
-    if seen.contains(&c.name) {
-        return Ok(());
-    }
-    active.insert(c.name.clone());
-    for n in &c.body {
-        if let Node::Call { callee, .. } = n {
-            order(
-                p,
-                p.circuit(callee)
-                    .ok_or_else(|| Error(format!("QASM: unknown callee {callee}")))?,
-                active,
-                seen,
-                out,
-            )?;
-        }
-    }
-    active.remove(&c.name);
-    seen.insert(c.name.clone());
-    out.push(c);
-    Ok(())
+mod legacy;
+mod local;
+mod stream;
+pub use crate::export::write_atomic;
+pub use legacy::write;
+pub use stream::{StreamRead, visit_stream, visit_stream_checked, write_oracle};
+
+#[derive(Clone, Debug, Default)]
+pub struct WriteStats {
+    pub writer_visits: u128,
+    pub bytes: u128,
+    pub metadata_bytes: usize,
+    pub peak_gate_objects: usize,
+    pub resident_descriptors: usize,
+    pub circuit_body_clones: usize,
+    pub per_gate_program_scans: usize,
 }
+fn io_error(error: std::io::Error) -> Error {
+    Error(format!("QASM I/O: {error}"))
+}
+fn put(writer: &mut dyn std::io::Write, text: &str) -> Result<()> {
+    writer.write_all(text.as_bytes()).map_err(io_error)
+}
+/// Small-caller adapter to the indexed writer. Legacy metadata remains lossless.
 pub fn export(p: &Program) -> Result<String> {
-    let mut sorted = vec![];
-    let mut seen = BTreeSet::new();
-    for c in &p.circuits {
-        order(p, c, &mut BTreeSet::new(), &mut seen, &mut sorted)?;
-    }
-    let mut text = format!(
-        "OPENQASM 3.0;\ninclude \"stdgates.inc\";\n// bc: {}\n",
-        ir_codec::encode(p).to_jcs()
-    );
-    let mut widths = BTreeMap::new();
-    for c in sorted {
-        let id = p.circuits.iter().position(|x| x.name == c.name).unwrap();
-        let map = wire_map(c);
-        let own = map.values().map(Vec::len).sum::<usize>();
-        let mut next = own;
-        let mut body = String::new();
-        for node in &c.body {
-            if let Node::Call {
-                callee,
-                adjoint,
-                controls,
-                args,
-            } = node
-            {
-                let target = p.circuit(callee).unwrap();
-                let cid = p.circuits.iter().position(|x| x.name == *callee).unwrap();
-                let mut wires = vec![];
-                for arg in args {
-                    wires.extend(
-                        map.get(arg)
-                            .ok_or_else(|| Error(format!("QASM: unknown argument {arg}")))?,
-                    );
-                }
-                if wires.len() != target.interface_wire_count() as usize {
-                    bail!("QASM: call width mismatch");
-                }
-                let count = widths[callee] - wires.len();
-                wires.extend(next..next + count);
-                next += count;
-                let cs = controls
-                    .iter()
-                    .map(|c| Ok((wr(&map, &c.qubit)?, c.positive)))
-                    .collect::<Result<Vec<_>>>()?;
-                body.push_str(&invocation(&ident(cid), &cs, &wires, *adjoint));
-            } else {
-                let flat = flatten(&one(c, vec![node.clone()]))?;
-                for g in flat.gates {
-                    body.push_str(&invocation(
-                        &ir_codec::gate(g.gate),
-                        &g.controls,
-                        &g.targets,
-                        false,
-                    ));
-                }
-            }
-        }
-        // OpenQASM gate definitions require at least one qubit. An inert
-        // sentinel handles a zero-wire identity, without changing the IR.
-        let width = next.max(1);
-        widths.insert(c.name.clone(), width);
-        text.push_str(&format!(
-            "gate {} {} {{\n{body}}}\n",
-            ident(id),
-            (0..width)
-                .map(|i| format!("v{i}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    let top = p.top_circuit()?;
-    let width = widths[&p.top];
-    let id = p.circuits.iter().position(|c| c.name == p.top).unwrap();
-    text.push_str(&format!(
-        "qubit[{width}] q;\n{} {};\n",
-        ident(id),
-        (0..width)
-            .map(|i| format!("q[{i}]"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    ));
-    // Interface metadata is intentionally separate from the IR codec:
-    // the executable parser never decodes the hierarchical IR.
-    text.push_str(&format!("// interface: {}\n", top.interface_wire_count()));
-    Ok(text)
+    let mut bytes = vec![];
+    write(p, &mut bytes)?;
+    String::from_utf8(bytes).map_err(|_| Error("QASM writer emitted invalid UTF-8".into()))
 }
 pub fn parse(text: &str) -> Result<Program> {
+    if text.lines().any(|line| line.starts_with("// bc-stream: ")) {
+        return stream::parse_program(text);
+    }
     let line = text
         .lines()
         .find_map(|l| l.strip_prefix("// bc: "))
@@ -307,6 +195,12 @@ fn expand(
 }
 /// Parse actual OpenQASM statements, ignoring the `bc` IR comments.
 pub fn parse_flat(text: &str) -> Result<Flat> {
+    if !text.lines().any(|line| line.starts_with("gate ")) {
+        return stream::materialize_flat(text);
+    }
+    parse_hierarchical_flat(text)
+}
+fn parse_hierarchical_flat(text: &str) -> Result<Flat> {
     let mut lines = text.lines();
     if lines.next() != Some("OPENQASM 3.0;") || lines.next() != Some("include \"stdgates.inc\";") {
         bail!("QASM: unsupported header");

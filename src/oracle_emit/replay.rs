@@ -155,10 +155,9 @@ impl Recipes {
     }
     /// Compatibility adapter; retains all IR nodes. Streaming clients use visit.
     pub fn to_program(&self) -> Result<Program> {
-        let private = self.wire_count()? - self.interface_wires();
-        let mut body = vec![];
+        let mut program = self.program_layout()?;
         self.visit(|gate| {
-            body.push(Node::Gate(GateInst {
+            program.circuits[0].body.push(Node::Gate(GateInst {
                 gate: BaseGate::X,
                 own_controls: gate.controls.len(),
                 controls: gate
@@ -173,6 +172,11 @@ impl Recipes {
             }));
             Ok(())
         })?;
+        Ok(program)
+    }
+    /// Geometry/roles/history provenance with an empty body, for stream headers.
+    pub fn program_layout(&self) -> Result<Program> {
+        let private = self.wire_count()? - self.interface_wires();
         let mut workspace = vec![];
         let fixed = self.machine.fixed - self.interface_wires();
         let history = usize::try_from(self.counts.history_wires)
@@ -211,7 +215,7 @@ impl Recipes {
             mem: vec![],
             workspace,
             local_regions: vec![],
-            body,
+            body: vec![],
         };
         Ok(Program {
             top: self.source.name.clone(),

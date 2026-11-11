@@ -1031,12 +1031,18 @@ fn export_region(args: &[String]) -> Result<()> {
     obj.check()?;
     let mut budget = None;
     let mut arguments = Vec::new();
+    let mut output = None;
     let mut options = args[3..].iter();
     while let Some(option) = options.next() {
         let value = options.next().ok_or_else(|| {
             bennett_circuits::Error(format!("export-qasm: {option} requires a value"))
         })?;
         match option.as_str() {
+            "--output" => {
+                if output.replace(value.clone()).is_some() {
+                    return Err(bennett_circuits::Error("export: repeated --output".into()));
+                }
+            }
             "--budget" => {
                 if budget.is_some() {
                     return Err(bennett_circuits::Error(
@@ -1092,6 +1098,15 @@ fn export_region(args: &[String]) -> Result<()> {
                 "export-qasm: oracle entry requires --budget B[,heap,stack,depth]".into(),
             )
         })?;
+        if args[0] == "export-qasm" {
+            if let Ok(Some(recipes)) =
+                bennett_circuits::oracle_emit::prepare(&obj, name, budget, &arguments)
+            {
+                return export_destination(output.as_deref(), |writer| {
+                    bennett_circuits::qasm::write_oracle(&obj, &recipes, writer).map(|_| ())
+                });
+            }
+        }
         bennett_circuits::oracle::specialise(&obj, name, budget, &arguments)?
     } else {
         if budget.is_some() {
@@ -1100,13 +1115,36 @@ fn export_region(args: &[String]) -> Result<()> {
         bennett_circuits::lower::lower_program_with_args(&obj, name, &arguments)?
     };
 
+    if args[0] == "export-qasm" {
+        return export_destination(output.as_deref(), |writer| {
+            bennett_circuits::qasm::write(&p, writer).map(|_| ())
+        });
+    }
     let text = match args[0].as_str() {
         "export-qir" => bennett_circuits::qir::export(&p)?,
-        "export-quil" => bennett_circuits::quil::export(&p)?,
-        _ => bennett_circuits::qasm::export(&p)?,
+        _ => bennett_circuits::quil::export(&p)?,
     };
-    print!("{text}");
-    Ok(())
+    export_destination(output.as_deref(), |writer| {
+        writer
+            .write_all(text.as_bytes())
+            .map_err(|e| bennett_circuits::Error(format!("export output: {e}")))
+    })
+}
+
+fn export_destination(
+    path: Option<&str>,
+    emit: impl FnOnce(&mut dyn std::io::Write) -> Result<()>,
+) -> Result<()> {
+    use std::io::Write;
+    if let Some(path) = path {
+        return bennett_circuits::qasm::write_atomic(std::path::Path::new(path), emit);
+    }
+    let stdout = std::io::stdout();
+    let mut writer = std::io::BufWriter::new(stdout.lock());
+    emit(&mut writer)?;
+    writer
+        .flush()
+        .map_err(|e| bennett_circuits::Error(format!("export output: {e}")))
 }
 
 fn main() -> ExitCode {
