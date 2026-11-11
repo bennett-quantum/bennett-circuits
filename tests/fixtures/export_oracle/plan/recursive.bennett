@@ -1,0 +1,19 @@
+bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32
+
+section symbols
+{"0":{"interface_hash":"5c4592cc254d5b4d989b4ff8d609362529f20d6763ee7c9f6f9dc40345712c6d","kind":"oracle","name":"recurse","signature":{"abi":"0.8","args":[],"fault":4,"in":[2],"kind":"oracle","mem":[],"tgt":2,"tier":"q"}},"1":{"interface_hash":"2d5655ba70669e3eae636fb0457319b9d6cc172279027873a01be4b5fa472aec","kind":"lproc","name":"again","signature":{"abi":"0.8","kind":"lproc","params":[2],"result":2,"tier":"q"}}}
+
+section functions
+oracle @recurse (x:wire[2] in) (t:wire[2]) (f:wire[4]) () ()
+regs { a:reg[2] }
+^entry():
+a = lift.call @again (x)
+lift.retval a
+lproc @again (p:reg[2]) (r:reg[2]) () () ()
+regs { a:reg[2] }
+^entry():
+a = lift.call @again (p)
+lift.ret a
+
+section layout
+{"A_tab":0,"H":12,"S_cells":4,"globals":{},"heap_base":4096,"heap_limit_max":0,"interface_regions":{"recurse":{}},"null_size":4096,"ptr_width":32}

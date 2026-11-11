@@ -1,0 +1,26 @@
+bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32
+
+section symbols
+{"0":{"interface_hash":"a1fd3efd6ebc3bdbcc26188ba5d092d670eb41fcaf68aa4db52a7c8fc406cf0b","kind":"oracle","name":"diamond","signature":{"abi":"0.8","args":[],"fault":4,"in":[2],"kind":"oracle","mem":[],"tgt":2,"tier":"q"}}}
+
+section functions
+oracle @diamond (x:wire[2] in) (t:wire[2]) (f:wire[4]) () ()
+regs { p:reg[1], c:reg[2], r:reg[2], label:reg[32] }
+^entry():
+p = lift.trunc.i1 x
+qbranch p ^left ^right
+^left():
+c = lift.const.i2 1
+qjump ^join
+^right():
+c = lift.const.i2 3
+qjump ^join
+^join():
+r = lift.and x c
+label = lift.label ^done
+qjumpr label
+^dead():
+c = lift.const.i2 0
+lift.retval c
+^done():
+lift.retval r
