@@ -1177,10 +1177,21 @@ pub fn specialise_legacy(
     budget: Budget,
     args: &[Argument],
 ) -> Result<Program> {
-    Ok(specialise_impl(obj, name, budget, args, false, None)?.0)
+    crate::oracle_emit::dispatch::literal(|| {
+        Ok(specialise_impl(obj, name, budget, args, false, None)?.0)
+    })
 }
-/// The default entry currently uses the unchanged literal construction.
-pub use specialise_legacy as specialise;
+/// Use engineered recipes when their proofs apply; keep the full literal
+/// bounded machine available for every general case.
+pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -> Result<Program> {
+    if crate::oracle_emit::dispatch::active() {
+        return specialise_legacy(obj, name, budget, args);
+    }
+    match crate::oracle_emit::prepare(obj, name, budget, args)? {
+        Some(recipes) => recipes.to_program(),
+        None => specialise_legacy(obj, name, budget, args),
+    }
+}
 /// Diagnostic execution includes one output bit per active forward row. These
 /// observer bits are never part of an exported oracle's interface.
 pub(crate) fn specialise_probe(
@@ -1203,14 +1214,16 @@ pub(crate) fn specialise_probe(
                 "lift.oracle_call" | "lift.oracle_uncall" | "lift.perm_call"
             )
         });
-    specialise_impl(
-        obj,
-        name,
-        budget,
-        args,
-        true,
-        if opaque { None } else { Some(basis) },
-    )
+    crate::oracle_emit::dispatch::literal(|| {
+        specialise_impl(
+            obj,
+            name,
+            budget,
+            args,
+            true,
+            if opaque { None } else { Some(basis) },
+        )
+    })
 }
 fn specialise_impl(
     obj: &Object,

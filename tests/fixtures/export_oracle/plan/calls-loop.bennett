@@ -1,0 +1,25 @@
+bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32
+
+section symbols
+{"0":{"interface_hash":"15af0a887bc1645146f80c53671a7b952fe10f85eafee892a3d1bebaac3f6510","kind":"oracle","name":"loop","signature":{"abi":"0.8","args":[],"fault":4,"in":[2],"kind":"oracle","mem":[],"tgt":2,"tier":"q"}},"1":{"interface_hash":"2340eab0cceddb083368004f4627748831aa71c58e433de6bd58cb3616ae4908","kind":"lproc","name":"inc","signature":{"abi":"0.8","kind":"lproc","params":[2],"result":2,"tier":"q"}}}
+
+section functions
+oracle @loop (x:wire[2] in) (t:wire[2]) (f:wire[4]) () ()
+regs { a:reg[2], p:reg[1] }
+^entry():
+p = lift.trunc.i1 x
+qjump ^repeat
+^repeat():
+a = lift.call @inc (x)
+qbranch p ^repeat ^done
+^done():
+lift.retval a
+lproc @inc (p:reg[2]) (r:reg[2]) () () ()
+regs { one:reg[2] }
+^entry():
+one = lift.const.i2 1
+r = lift.add p one
+lift.ret r
+
+section layout
+{"A_tab":0,"H":12,"S_cells":5,"globals":{},"heap_base":4096,"heap_limit_max":0,"interface_regions":{"loop":{}},"null_size":4096,"ptr_width":32}

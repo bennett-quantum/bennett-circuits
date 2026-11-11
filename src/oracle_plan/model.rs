@@ -177,6 +177,9 @@ impl Model {
     }
 }
 fn validate_budget(obj: &Object, budget: Budget) -> Result<()> {
+    if obj.layout.is_none() && (budget.heap != 0 || budget.stack != 0 || budget.depth != 0) {
+        bail!("plan: memoryless budget limits must be zero (§5.4)")
+    }
     if let Some(layout) = &obj.layout {
         let exponent = layout.get("S_cells").and_then(|v| v.as_u64()).unwrap();
         let heap = layout
