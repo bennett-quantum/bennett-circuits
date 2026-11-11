@@ -196,7 +196,11 @@ fn fault(model: &Model, key: &RowKey, before: &State, out: &mut Transition) {
         panic!("checked fault code")
     };
     if bit != Some(false) {
-        out.halt(Some(KnownBits::integer(code, 4).as_u128().map(|v| v as u8)));
+        out.halt(Some(
+            KnownBits::integer(code, model.fault_width)
+                .as_u128()
+                .and_then(|v| u8::try_from(v).ok()),
+        ));
     }
     if bit != Some(true) {
         out.go(
