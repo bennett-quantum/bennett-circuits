@@ -1,0 +1,54 @@
+bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=64
+
+section symbols
+{"0":{"interface_hash":"2ab39c58aeb271ede5f7c6a4b29021f7c40c131d60ee4fca42f3410538d0394e","kind":"oracle","name":"ref","signature":{"abi":"0.8","args":[],"fault":4,"in":[8],"kind":"oracle","mem":[],"tgt":8,"tier":"q"}},"1":{"interface_hash":"763cca54458f1f9818a8e1aecae275e70dada9f4367d70eabfc0addd74d63c17","kind":"lproc","name":"L1","signature":{"abi":"0.8","kind":"lproc","params":[8],"result":8,"tier":"q"}}}
+
+section functions
+oracle @ref (x0:wire[8] in) (tgt:wire[8]) (fault:wire[4]) () ()
+regs { r:reg[8] }
+^entry():
+r = lift.call @L1 (x0)
+lift.retval r
+lproc @L1 (a0:reg[8]) (r:reg[8]) () () ()
+regs { c0:reg[8], v0:reg[1], c1:reg[8], v12:reg[8], v1:reg[64], c2:reg[8], v2:reg[8], v3:reg[64], c3:reg[64], v4:reg[64], c4:reg[64], v5:reg[1], c5:reg[64], v6:reg[64], c6:reg[64], v7:reg[64], c7:reg[64], v8:reg[64], v9:reg[64], c8:reg[8], v10:reg[8], c9:reg[64], v11:reg[1] }
+^b0():
+c0 = lift.const.i8 1
+v0 = lift.icmp.eq a0 c0
+qbranch v0 ^b0.e3 ^b1
+^b0.e3():
+c1 = lift.const.i8 0
+(v12) = lift.parmov (c1)
+qjump ^b3
+^b1():
+v1 = lift.zext.i64 a0
+c2 = lift.const.i8 0
+(v2, v3) = lift.parmov (c2, v1)
+qjump ^b2
+^b2():
+c3 = lift.const.i64 1
+v4 = lift.and v3 c3
+c4 = lift.const.i64 0
+v5 = lift.icmp.eq v4 c4
+c5 = lift.const.i64 1
+v6 = lift.lshr v3 c5
+c6 = lift.const.i64 3
+v7 = lift.mul v3 c6
+c7 = lift.const.i64 1
+v8 = lift.add v7 c7
+v9 = lift.select v5 v6 v8
+c8 = lift.const.i8 1
+v10 = lift.add v2 c8
+c9 = lift.const.i64 1
+v11 = lift.icmp.eq v9 c9
+qbranch v11 ^b2.e3 ^b2.e2
+^b2.e2():
+(v2, v3) = lift.parmov (v10, v9)
+qjump ^b2
+^b2.e3():
+(v12) = lift.parmov (v10)
+qjump ^b3
+^b3():
+lift.ret v12
+
+section layout
+{"A_tab":0,"H":12,"S_cells":5,"globals":{},"heap_base":4096,"heap_limit_max":0,"interface_regions":{"ref":{}},"null_size":4096,"ptr_width":64}
