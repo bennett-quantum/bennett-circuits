@@ -95,3 +95,74 @@ pub(crate) fn source(text: &str, comment: &str) -> Result<Program> {
     }
     Ok(p)
 }
+
+/// Counts actual accepted bytes, including partial writes, without buffering.
+pub(crate) struct CountingWrite<'a, W: std::io::Write + ?Sized> {
+    inner: &'a mut W,
+    pub bytes: u128,
+}
+impl<'a, W: std::io::Write + ?Sized> CountingWrite<'a, W> {
+    pub fn new(inner: &'a mut W) -> Self {
+        Self { inner, bytes: 0 }
+    }
+}
+impl<W: std::io::Write + ?Sized> std::io::Write for CountingWrite<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let count = self.inner.write(bytes)?;
+        self.bytes += count as u128;
+        Ok(count)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+/// Complete a file beside its destination, then atomically replace it. An error
+/// leaves any prior destination intact and removes the incomplete temporary.
+pub fn write_atomic(
+    path: &std::path::Path,
+    emit: impl FnOnce(&mut dyn std::io::Write) -> Result<()>,
+) -> Result<()> {
+    use std::{
+        fs::OpenOptions,
+        io::{BufWriter, Write},
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    static SERIAL: AtomicU64 = AtomicU64::new(0);
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    let name = path.file_name().ok_or("export: missing output filename")?;
+    let (mut file, temp) = loop {
+        let mut name = name.to_os_string();
+        name.push(format!(
+            ".partial-{}-{}",
+            std::process::id(),
+            SERIAL.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temp = parent.join(name);
+        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => break (file, PartialFile(temp)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(crate::Error(format!("export: create output: {e}"))),
+        }
+    };
+    {
+        let mut writer = BufWriter::new(&mut file);
+        emit(&mut writer)?;
+        writer
+            .flush()
+            .map_err(|e| crate::Error(format!("export: flush output: {e}")))?;
+    }
+    file.sync_all()
+        .map_err(|e| crate::Error(format!("export: sync output: {e}")))?;
+    std::fs::rename(&temp.0, path)
+        .map_err(|e| crate::Error(format!("export: complete output: {e}")))?;
+    Ok(())
+}
+struct PartialFile(std::path::PathBuf);
+impl Drop for PartialFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}

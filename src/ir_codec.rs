@@ -357,3 +357,77 @@ pub(crate) fn decode(v: &V) -> Result<Program> {
         circuits,
     })
 }
+
+/// Lossless legacy metadata written a node at a time, without building a second
+/// complete JSON tree or a complete metadata String beside the input program.
+pub(crate) fn write(p: &Program, out: &mut dyn std::io::Write) -> Result<()> {
+    raw(out, "[\"bc-ir-3\",")?;
+    json(out, s(&p.top))?;
+    raw(out, ",")?;
+    sequence(out, p.circuits.iter(), |out, c| {
+        raw(out, "[")?;
+        json(out, s(&c.name))?;
+        raw(out, ",")?;
+        json(out, V::Bool(c.perm))?;
+        raw(out, ",")?;
+        sequence(out, c.mut_bundles.iter(), bundle_json)?;
+        raw(out, ",")?;
+        sequence(out, c.in_bundles.iter(), bundle_json)?;
+        raw(out, ",")?;
+        sequence(out, c.mem.iter(), |o, m| {
+            json(
+                o,
+                a([s(&m.name), n(m.addr_width), n(m.cell_width), role(m.role)]),
+            )
+        })?;
+        raw(out, ",")?;
+        sequence(out, c.workspace.iter(), |o, w| {
+            json(
+                o,
+                a([
+                    s(&w.name),
+                    n(w.width),
+                    s(match w.kind {
+                        WsKind::Clean => "clean",
+                        WsKind::RetainedHistory => "history",
+                        WsKind::Borrowed => "borrowed",
+                        WsKind::LocalRegion => "region",
+                    }),
+                    s(&w.class),
+                ]),
+            )
+        })?;
+        raw(out, ",")?;
+        sequence(out, c.local_regions.iter(), |o, r| {
+            json(o, a([s(&r.name), n(r.addr_width), n(r.cell_width)]))
+        })?;
+        raw(out, ",")?;
+        sequence(out, c.body.iter(), |o, n| json(o, node(n)))?;
+        raw(out, "]")
+    })?;
+    raw(out, "]")
+}
+fn sequence<T>(
+    out: &mut dyn std::io::Write,
+    items: impl Iterator<Item = T>,
+    mut emit: impl FnMut(&mut dyn std::io::Write, T) -> Result<()>,
+) -> Result<()> {
+    raw(out, "[")?;
+    for (i, item) in items.enumerate() {
+        if i != 0 {
+            raw(out, ",")?;
+        }
+        emit(out, item)?;
+    }
+    raw(out, "]")
+}
+fn bundle_json(out: &mut dyn std::io::Write, b: &Bundle) -> Result<()> {
+    json(out, a([s(&b.name), n(b.width), role(b.role)]))
+}
+fn json(out: &mut dyn std::io::Write, v: V) -> Result<()> {
+    raw(out, &v.to_jcs())
+}
+fn raw(out: &mut dyn std::io::Write, s: &str) -> Result<()> {
+    out.write_all(s.as_bytes())
+        .map_err(|e| Error(format!("QASM metadata write: {e}")))
+}

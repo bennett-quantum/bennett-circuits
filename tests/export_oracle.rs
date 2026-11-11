@@ -2452,3 +2452,248 @@ fn engineered_wide_fault_literals_preserve_high_bits_and_nonzero_outputs() {
         }
     }
 }
+
+#[test]
+fn streamed_recipe_roundtrip_and_independent_executable_agree() {
+    use bennett_circuits::oracle_emit::prepare;
+    let object = checked_collatz();
+    for steps in [0, 1, 9] {
+        let recipes = prepare(&object, "ref", budget(steps, 32, 32), &[])
+            .unwrap()
+            .unwrap();
+        let mut bytes = vec![];
+        let stats = qasm::write_oracle(&object, &recipes, &mut bytes).unwrap();
+        assert_eq!(stats.writer_visits, recipes.counts().full);
+        assert_eq!(stats.bytes, bytes.len() as u128);
+        assert!(stats.metadata_bytes < 8192);
+        assert!(stats.peak_gate_objects < 50_000);
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(!text.contains("// bc: "));
+        assert_eq!(qasm::parse(text).unwrap(), recipes.to_program().unwrap());
+        let executable = text
+            .lines()
+            .filter(|line| !line.starts_with("// bc-"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let flat = qasm::parse_flat(&executable).unwrap();
+        let evaluated = Permutation::from_flat(flat).unwrap();
+        evaluated.check_xor_outputs(0..12).unwrap();
+        assert_tuples(&evaluated, &collatz_tuples(budget(steps, 32, 32)));
+    }
+}
+
+fn assert_streamed_file_tuples(
+    path: &Path,
+    recipes: &bennett_circuits::oracle_emit::Recipes,
+    tuples: &[(u64, u64)],
+) {
+    let wires = recipes.wire_count().unwrap();
+    let interface = recipes.interface_wires();
+    let words = tuples.len().div_ceil(64);
+    let mut state = vec![0u64; wires * words];
+    for (lane, (input, _)) in tuples.iter().enumerate() {
+        for wire in 0..interface {
+            state[wire * words + lane / 64] |= ((input >> wire) & 1) << (lane % 64);
+        }
+    }
+    for invocation in 0..2 {
+        let file = std::fs::File::open(path).unwrap();
+        let parsed = qasm::visit_stream_checked(std::io::BufReader::new(file), |gate| {
+            assert_eq!(gate.gate, BaseGate::X);
+            assert_eq!(gate.targets.len(), 1);
+            let target = gate.targets[0];
+            assert!(target < 12 || target >= interface, "input write");
+            assert!(
+                gate.controls.iter().all(|(q, _)| *q >= 12),
+                "output used as control"
+            );
+            for word in 0..words {
+                let enabled = gate.controls.iter().fold(u64::MAX, |mask, (q, p)| {
+                    mask & if *p {
+                        state[q * words + word]
+                    } else {
+                        !state[q * words + word]
+                    }
+                });
+                state[target * words + word] ^= enabled;
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(parsed.qubits, wires);
+        assert_eq!(parsed.interface, interface);
+        assert_eq!(parsed.gates, recipes.counts().full);
+        assert_eq!(parsed.peak_gate_objects, 1);
+        for (lane, (input, output)) in tuples.iter().enumerate() {
+            let expected = if invocation == 0 { *output } else { *input };
+            for wire in 0..interface {
+                assert_eq!(
+                    (state[wire * words + lane / 64] >> (lane % 64)) & 1,
+                    (expected >> wire) & 1,
+                    "stream wire={wire} input={input} invocation={invocation}"
+                );
+            }
+        }
+        for wire in interface..wires {
+            for word in 0..words {
+                let mask = if word + 1 == words && tuples.len() % 64 != 0 {
+                    (1u64 << (tuples.len() % 64)) - 1
+                } else {
+                    u64::MAX
+                };
+                assert_eq!(
+                    state[wire * words + word] & mask,
+                    0,
+                    "dirty stream workspace wire={wire}"
+                );
+            }
+        }
+    }
+}
+#[test]
+fn streamed_cli_collatz_large_boundaries_match_reference_without_gate_arrays() {
+    use bennett_circuits::oracle_emit::prepare;
+    let object = checked_collatz();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/export_oracle/collatz.bennett");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/streamed-oracle-cli");
+    std::fs::create_dir_all(&dir).unwrap();
+    let binary = sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref");
+    for steps in [10, 27, 28, 29, 45, 46, 47, 2048] {
+        let path = dir.join(format!("collatz-{steps}.qasm"));
+        let output = Command::new(env!("CARGO_BIN_EXE_bennett-circuits"))
+            .args([
+                "export-qasm",
+                fixture.to_str().unwrap(),
+                "ref",
+                "--budget",
+                &format!("{steps},0,32,32"),
+                "--output",
+                path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        let recipes = prepare(&object, "ref", budget(steps, 32, 32), &[])
+            .unwrap()
+            .unwrap();
+        let mut tuples = vec![];
+        for x in 0..256u64 {
+            let out = Command::new(&binary)
+                .args([
+                    "run-oracle",
+                    fixture.to_str().unwrap(),
+                    "ref",
+                    "--input",
+                    &x.to_string(),
+                    "--budget",
+                    &format!("{steps},0,32,32"),
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            let value = Value::parse(std::str::from_utf8(&out.stdout).unwrap()).unwrap();
+            let payload = value.get("payload").and_then(Value::as_u64).unwrap();
+            let code = value.get("code").and_then(Value::as_u64).unwrap();
+            for (target, fault) in collatz_probes() {
+                tuples.push((
+                    target | (fault << 8) | (x << 12),
+                    (target ^ payload) | ((fault ^ code) << 8) | (x << 12),
+                ));
+            }
+        }
+        assert_streamed_file_tuples(&path, &recipes, &tuples);
+        eprintln!(
+            "streamed CLI B={steps}:{} actual gates,256inputs x16outputs,private cleanup/involution",
+            recipes.counts().full
+        );
+    }
+}
+#[test]
+fn streamed_writer_size_points_preserve_gate_counts_and_bounded_resident_shape() {
+    use bennett_circuits::oracle_emit::prepare;
+    let object = checked_collatz();
+    let mut shape = None;
+    for steps in [0, 1, 2, 4, 8, 9, 16, 32, 64, 2048, 4096] {
+        let recipes = prepare(&object, "ref", budget(steps, 32, 32), &[])
+            .unwrap()
+            .unwrap();
+        let mut sink = std::io::sink();
+        let stats = qasm::write_oracle(&object, &recipes, &mut sink).unwrap();
+        assert_eq!(stats.writer_visits, recipes.counts().full);
+        assert!(stats.peak_gate_objects <= 50_000);
+        assert!(stats.metadata_bytes < 8192);
+        assert_eq!(stats.circuit_body_clones, 0);
+        assert_eq!(stats.per_gate_program_scans, 0);
+        let current = (stats.peak_gate_objects, stats.resident_descriptors);
+        if let Some(previous) = shape {
+            assert_eq!(current, previous);
+        }
+        shape = Some(current);
+        eprintln!(
+            "writer B={steps} gates={} bytes={} peak_gate_objects={} descriptors={} metadata_bytes={}",
+            stats.writer_visits,
+            stats.bytes,
+            stats.peak_gate_objects,
+            stats.resident_descriptors,
+            stats.metadata_bytes
+        );
+    }
+}
+
+#[test]
+fn streamed_cli_resident_limit_excludes_a_materialized_budget_gate_array() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join(".tmp/qasm-resident-cli");
+    std::fs::create_dir_all(&dir).unwrap();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("bounded.qasm.partial-")
+        {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
+    let destination = dir.join("bounded.qasm");
+    let fixture = root.join("tests/fixtures/export_oracle/collatz.bennett");
+    // A host representation guard, not an oracle budget or elapsed acceptance.
+    let script = "import os,resource,sys; resource.setrlimit(resource.RLIMIT_CORE,(0,0)); resource.setrlimit(resource.RLIMIT_AS,(128*1024*1024,128*1024*1024)); os.execv(sys.argv[1],sys.argv[1:])";
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            script,
+            env!("CARGO_BIN_EXE_bennett-circuits"),
+            "export-qasm",
+            fixture.to_str().unwrap(),
+            "ref",
+            "--budget",
+            "2048,0,32,32",
+            "--output",
+            destination.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let parsed = qasm::visit_stream_checked(
+        std::io::BufReader::new(std::fs::File::open(destination).unwrap()),
+        |_| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(parsed.gates, 977_927);
+}

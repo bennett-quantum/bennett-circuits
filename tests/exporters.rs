@@ -295,3 +295,101 @@ fn every_gate_every_control_polarity_pattern_has_the_same_exact_state() {
         }
     }
 }
+
+#[test]
+fn external_parser_accepts_compact_direct_oracle_qasm_and_independent_digest() {
+    use bennett_circuits::{object::Object, oracle::Budget, oracle_emit, qasm};
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join(".tmp/export-validators/direct.qasm");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let object = Object::parse(include_str!("fixtures/export_oracle/collatz.bennett")).unwrap();
+    let recipes = oracle_emit::prepare(
+        &object,
+        "ref",
+        Budget {
+            steps: 9,
+            heap: 0,
+            stack: 32,
+            depth: 32,
+        },
+        &[],
+    )
+    .unwrap()
+    .unwrap();
+    qasm::write_atomic(&path, |writer| {
+        qasm::write_oracle(&object, &recipes, writer).map(|_| ())
+    })
+    .unwrap();
+    let script = root.join("scripts/validate_exporters.py");
+    require_validator(
+        "uv",
+        &[
+            "run",
+            "--offline",
+            "--no-project",
+            "--with",
+            "openqasm3[parser]==1.0.1",
+            "--with",
+            "quil==0.37.3",
+            "--with",
+            "antlr4-python3-runtime==4.13.2",
+            "--with",
+            "numpy==2.5.4",
+            "--",
+            "python3",
+            script.to_str().unwrap(),
+            "--qasm-only",
+            path.to_str().unwrap(),
+        ],
+    );
+}
+
+#[test]
+fn output_files_preserve_all_export_formats_and_cli_argument_checks() {
+    use std::process::Command;
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let dir = root.join(".tmp/export-destinations");
+    std::fs::create_dir_all(&dir).unwrap();
+    let fixture = sibling::isa().join("reference-interpreter/tests/fixtures/control_flow.bisa");
+    for format in ["qasm", "qir", "quil"] {
+        let command = format!("export-{format}");
+        let path = dir.join(format!("phase.{format}"));
+        let standard = Command::new(env!("CARGO_BIN_EXE_bennett-circuits"))
+            .args([&command, fixture.to_str().unwrap(), "controlled_phase"])
+            .output()
+            .unwrap();
+        assert!(standard.status.success());
+        let output = Command::new(env!("CARGO_BIN_EXE_bennett-circuits"))
+            .args([
+                &command,
+                fixture.to_str().unwrap(),
+                "controlled_phase",
+                "--output",
+                path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), standard.stdout);
+        let bad = Command::new(env!("CARGO_BIN_EXE_bennett-circuits"))
+            .args([
+                &command,
+                fixture.to_str().unwrap(),
+                "controlled_phase",
+                "--output",
+                path.to_str().unwrap(),
+                "--output",
+                path.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(!bad.status.success());
+        assert!(bad.stdout.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), standard.stdout);
+    }
+}

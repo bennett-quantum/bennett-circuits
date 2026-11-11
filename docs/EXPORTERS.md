@@ -1,8 +1,11 @@
 # Circuit exporters
 
-All three exporters consume `ir::Program`. The CLI checks stored object
-identities and source obligations before lowering an action or specialising
-an oracle. Classical arguments and budgets use the same syntax in every format:
+OpenQASM streams proved bounded-oracle recipes directly. Its lossless
+`ir::Program` API remains available for actions and general constructions.
+QIR and Quil retain their `ir::Program` adapters, including the same engineered
+oracle lowering; those adapters still materialize their instruction arrays.
+The CLI checks stored identities and source obligations before every format.
+Classical arguments and budgets use the same syntax in every format:
 
 ```sh
 bennett-circuits export-qasm object.bisa action
@@ -32,6 +35,62 @@ These are validators for the emitted subsets, not general import APIs. They
 reject unknown instructions, invalid indices, operand aliasing, malformed
 angles and incomplete output. Removing an IR comment does not prevent
 executable simulation; changing executable gates is visible to that simulation.
+
+## OpenQASM streams and file output
+
+```sh
+bennett-circuits export-qasm collatz.bennett ref --budget 2048,0,32,32 --output collatz.qasm
+```
+
+Omit `--output` to write stdout. Every format accepts `--output PATH`: it writes
+a sibling temporary, flushes and synchronizes it, then atomically replaces the
+destination. An error preserves the previous destination. Stdout write/flush
+errors produce a failing exit; consumers must check completion before using
+an oracle artifact. Source validation finishes before stdout receives a header.
+
+`qasm::write` emits the legacy hierarchical format through `Write`, with indexed
+names and lazy primitive expansion. It neither clones the enclosing circuit per
+node nor constructs a flattened gate array. Legacy `bc-ir-3` metadata is written
+one node at a time. `qasm::export` is the retaining String adapter;
+`qasm::parse` preserves exact legacy IR roundtrips.
+
+`qasm::write_oracle` consumes immutable recipes and their bound checked Object.
+It emits `qubit[N] q;` and direct `ctrl`/`negctrl` standard-gate statements, using
+one recipe layer at a time. No whole oracle Program, gate array, gate-definition
+argument list or output String is constructed. `--output` and stdout both use
+this path when specialization proofs apply. General oracles and actions retain
+the lossless hierarchy path; choosing streaming never removes a capability.
+
+The compact comment version is `bc-oracle-stream-1`. `bc-stream` records the
+original object/closure identities, arguments, original budgets, a `bc-ir-3`
+layout with an empty body, and logical gate/history counts. Integers in compact
+counts/bindings are decimal strings. This is source identity evidence; the
+artifact carries no claim that an old source certificate proves a new target
+realization. Target and schedule certificates require fresh binding/validation.
+
+A mandatory `bc-end` record carries the executable count and `sha256-chain-v1`
+completion digest. Starting at SHA-256 of UTF-8
+`bennett-qasm-sha256-chain-v1`, each exact line before the footer updates the
+chain as SHA-256(previous digest || 8-byte big-endian line length || line bytes).
+Newline bytes participate. This detects incomplete/edited transport, not a
+producer attestation or a proof of semantic equivalence.
+
+`qasm::visit_stream_checked` validates the compact schema, layout, actual gate
+count/control histogram and completion digest while visiting actual statements.
+A visitor must discard its result on error, including an error detected at EOF.
+`qasm::visit_stream` independently reads the direct executable subset, ignoring
+IR/source/completion comments. `parse_flat` also accepts that subset, including
+metadata-stripped executable text, while retaining its legacy hierarchy parser.
+`parse` reconstructs a compact artifact's Program from layout plus executable
+statements and validates completion; executable equivalence is the compact
+format's invariant. Materializing parse/String adapters remain small-caller
+interfaces; the visitor APIs retain one parsed gate at a time.
+
+Writer counters distinguish operation visits, actual bytes, metadata size and
+resident recipe/layout descriptors. Peak gate objects include one transient
+writer gate beside the recipe layer and exclude a caller-owned legacy Program.
+Quantum workspace/history widths are separate metrics. The test host memory
+limit is a representation guard, never an ISA oracle budget or a time threshold.
 
 ## QIR
 
