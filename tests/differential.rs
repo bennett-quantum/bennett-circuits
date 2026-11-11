@@ -292,3 +292,62 @@ fn synthetic_corpus() -> PathBuf {
     std::fs::write(&path, format!("{text}\nsection layout\n{layout}\n")).unwrap();
     path
 }
+
+#[test]
+fn conformance_command_keeps_published_and_local_export_verdicts_separate() {
+    let out = Command::new("python3")
+        .args([
+            "-I",
+            root()
+                .join("scripts/test_exporter_gate.py")
+                .to_str()
+                .unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn normal_gate_discovers_required_exporter_acceptance_without_ignores() {
+    let exe = std::env::current_exe().unwrap();
+    let listed = Command::new(&exe).arg("--list").output().unwrap();
+    assert!(listed.status.success());
+    let ignored = Command::new(&exe)
+        .args(["--ignored", "--list"])
+        .output()
+        .unwrap();
+    assert!(ignored.status.success());
+    let listed = String::from_utf8(listed.stdout).unwrap();
+    let ignored = String::from_utf8(ignored.stdout).unwrap();
+    for name in [
+        "export_oracle::checked_collatz_fixture_is_hash_bound",
+        "export_oracle::collatz_legacy_counts_semantics_cleanup_and_involution",
+        "export_oracle::analyzed_plan_fixpoint_is_independent_of_function_and_block_visits",
+        "export_oracle::engineered_collatz_recipe_counts_meet_full_envelope_without_gate_arrays",
+        "export_oracle::engineered_collatz_capacity_matrix_preserves_first_faults",
+        "export_oracle::engineered_positive_negative_controls_preserve_external_unknown_state",
+        "export_oracle::engineered_wide_fault_literals_preserve_high_bits_and_nonzero_outputs",
+        "export_oracle::streamed_cli_collatz_large_boundaries_match_reference_without_gate_arrays",
+        "export_oracle::streamed_writer_size_points_preserve_gate_counts_and_bounded_resident_shape",
+        "export_oracle::streamed_cli_resident_limit_excludes_a_materialized_budget_gate_array",
+        "qasm::stream_io_allocation_short_write_and_flush_failures_are_explicit",
+        "qasm::checked_stream_rejects_truncation_metadata_and_gate_edits_independently",
+        "exporters::external_parser_accepts_compact_direct_oracle_qasm_and_independent_digest",
+    ] {
+        let entry = format!("{name}: test");
+        assert!(
+            listed.lines().any(|line| line == entry),
+            "missing normal exporter acceptance {name}"
+        );
+        assert!(
+            !ignored.lines().any(|line| line == entry),
+            "exporter acceptance was ignored: {name}"
+        );
+    }
+}

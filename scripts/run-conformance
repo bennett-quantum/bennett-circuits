@@ -11,4 +11,20 @@ mkdir -p "$TMPDIR" "$repo/.tmp/conformance"
 rustc --edition=2021 --crate-name bennett_isa_conformance --crate-type rlib "$spec/conformance/src/lib.rs" --out-dir "$repo/.tmp/conformance"
 rustc --edition=2021 "$spec/conformance/src/main.rs" --extern "bennett_isa_conformance=$repo/.tmp/conformance/libbennett_isa_conformance.rlib" -o "$repo/.tmp/conformance/harness"
 cargo build --offline -j3 --manifest-path "$repo/Cargo.toml"
-exec "$repo/.tmp/conformance/harness" --cases "$spec/conformance/cases" --suite F --bin "${CARGO_TARGET_DIR:-$repo/target}/debug/bennett-circuits" "$@"
+# The published suite and local export acceptance are independent verdicts.
+# Preserve suite F's invocation, stdout and exit priority; never edit its cases.
+set +e
+"$repo/.tmp/conformance/harness" --cases "$spec/conformance/cases" --suite F --bin "${CARGO_TARGET_DIR:-$repo/target}/debug/bennett-circuits" "$@"
+published_status=$?
+timeout --signal=TERM --kill-after=5s "${BENNETT_EXPORTER_GUARD_S:-1200}" cargo test --offline -j3 --manifest-path "$repo/Cargo.toml" --test integration export_oracle:: -- --test-threads=1 >&2
+exporter_status=$?
+set -e
+if [ "$exporter_status" -eq 0 ]; then
+  printf 'Local exporter differential: PASS\n' >&2
+elif [ "$exporter_status" -eq 124 ] || [ "$exporter_status" -ge 128 ]; then
+  printf 'Local exporter differential: UNKNOWN (hang guard or signal; exit %s)\n' "$exporter_status" >&2
+else
+  printf 'Local exporter differential: FAIL (exit %s)\n' "$exporter_status" >&2
+fi
+if [ "$published_status" -ne 0 ]; then exit "$published_status"; fi
+exit "$exporter_status"

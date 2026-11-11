@@ -158,12 +158,17 @@ if "-o" in sys.argv:
         output = self.run_script()
         self.assertEqual(output.returncode, 0, output.stderr)
         commands = [json.loads(line) for line in self.log.read_text().splitlines()]
-        self.assertEqual(len(commands), 4)
+        self.assertEqual(len(commands), 5)
         self.assertIn(str(self.cache / "conformance/src/lib.rs"), commands[0])
         self.assertIn(str(self.cache / "conformance/src/main.rs"), commands[1])
         self.assertIn(str(self.cache / "conformance/cases"), commands[3])
         self.assertIn(str(self.root / ".tmp/custom-target/debug/bennett-circuits"), commands[3])
         self.assertEqual(commands[3][-1], "--verbose")
+        self.assertEqual(commands[4][1:], [
+            "test", "--offline", "-j3", "--manifest-path", str(self.root / "Cargo.toml"),
+            "--test", "integration", "export_oracle::", "--", "--test-threads=1",
+        ])
+        self.assertIn("Local exporter differential: PASS", output.stderr)
         for args in commands:
             self.assertFalse(any(str(self.live) in arg for arg in args))
 
