@@ -179,6 +179,8 @@ src` (zero matches) and `git ls-files | rg
 job/shift/round labels and session dates. This is the repo's own baseline.
 
 <!-- quality-baseline -->
+New oracle analysis modules have measured structure entries; existing per-file limits are retained.
+
 ```json
 {
   "complexity_mass_per_file": {
@@ -202,6 +204,13 @@ job/shift/round labels and session dates. This is the repo's own baseline.
     "src/metadata.rs": 478,
     "src/object.rs": 868,
     "src/oracle.rs": 525,
+    "src/oracle_plan.rs": 4,
+    "src/oracle_plan/flow.rs": 22,
+    "src/oracle_plan/known.rs": 86,
+    "src/oracle_plan/layers.rs": 11,
+    "src/oracle_plan/model.rs": 50,
+    "src/oracle_plan/transfer.rs": 44,
+    "src/oracle_plan/transfer/effects.rs": 22,
     "src/placement.rs": 268,
     "src/proof.rs": 80,
     "src/qasm.rs": 137,
@@ -215,9 +224,9 @@ job/shift/round labels and session dates. This is the repo's own baseline.
     "src/translation.rs": 111
   },
   "length_distribution": {
-    "1-30": 402,
+    "1-30": 457,
     "101-300": 41,
-    "31-100": 132,
+    "31-100": 142,
     "over-300": 6
   },
   "longest_per_file": {
@@ -241,6 +250,13 @@ job/shift/round labels and session dates. This is the repo's own baseline.
     "src/metadata.rs": 269,
     "src/object.rs": 139,
     "src/oracle.rs": 460,
+    "src/oracle_plan.rs": 36,
+    "src/oracle_plan/flow.rs": 51,
+    "src/oracle_plan/known.rs": 23,
+    "src/oracle_plan/layers.rs": 37,
+    "src/oracle_plan/model.rs": 42,
+    "src/oracle_plan/transfer.rs": 49,
+    "src/oracle_plan/transfer/effects.rs": 41,
     "src/placement.rs": 264,
     "src/proof.rs": 76,
     "src/qasm.rs": 96,
@@ -257,7 +273,7 @@ job/shift/round labels and session dates. This is the repo's own baseline.
   "tracked_litter": [
     ".beads/hooks/pre-push.backup"
   ],
-  "trivial_wrappers": 104
+  "trivial_wrappers": 108
 }
 ```
 

@@ -605,3 +605,965 @@ fn pinned_reference_adjudicates_collatz_row_and_capacity_boundaries() {
         }
     }
 }
+
+#[test]
+fn analyzed_plan_binds_identity_constants_and_call_contexts() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, Check, Event, analyze};
+    let obj = checked_collatz();
+    let b = budget(2048, 32, 32);
+    let plan = analyze(&obj, "ref", b, &[], &[], AnalysisOrder::Forward).unwrap();
+    assert_eq!(plan.binding().object_hash, obj.object_hash());
+    assert_eq!(plan.binding().budget, b);
+    assert!(!plan.is_general());
+    assert_eq!(plan.rows().len(), 33);
+    let entry = plan.node(0, &[]).unwrap();
+    assert!(matches!(
+        entry.event,
+        Event::Call {
+            cells: 28,
+            check: Check::Safe,
+            ..
+        }
+    ));
+    let ret = plan.node(32, &[0]).unwrap();
+    assert_eq!(
+        ret.successors
+            .iter()
+            .filter_map(|e| e.target.as_ref())
+            .map(|k| k.pc)
+            .collect::<Vec<_>>(),
+        [1]
+    );
+    let mul = plan.node(19, &[0]).unwrap();
+    assert_eq!(mul.operands[1].as_u128(), Some(3));
+    let shift = plan.node(17, &[0]).unwrap();
+    assert_eq!(shift.operands[1].as_u128(), Some(1));
+    assert!(plan.layers().descriptor_count() < 256);
+    assert!(
+        plan.layer(2047)
+            .iter()
+            .all(|k| k.pc == plan.rows().len() || k.calls == [0] || k.pc == 1)
+    );
+}
+
+#[test]
+fn analyzed_plan_fixpoint_is_independent_of_function_and_block_visits() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    let obj = checked_collatz();
+    let forward = analyze(
+        &obj,
+        "ref",
+        budget(2048, 32, 32),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    for order in [
+        AnalysisOrder::FunctionsReversed,
+        AnalysisOrder::BlocksReversed,
+    ] {
+        let other = analyze(&obj, "ref", budget(2048, 32, 32), &[], &[], order).unwrap();
+        assert_eq!(forward.rows(), other.rows());
+        assert_eq!(forward.nodes(), other.nodes());
+        assert_eq!(forward.layers(), other.layers());
+        assert_eq!(forward.binding(), other.binding());
+    }
+}
+
+#[test]
+fn analyzed_plan_literals_preserve_modular_negative_and_wide_values() {
+    use bennett_circuits::oracle_plan::KnownBits;
+    for width in 1..=8 {
+        for value in -255i32..=255 {
+            let bits = KnownBits::integer(&value.to_string(), width);
+            assert_eq!(
+                bits.as_u128(),
+                Some((value as u128) & ((1 << width) - 1)),
+                "value={value} width={width}"
+            );
+        }
+    }
+    let minus_one = KnownBits::integer("-1", 257);
+    assert!(minus_one.0.iter().all(|b| *b == Some(true)));
+    assert_eq!(minus_one.as_u128(), None);
+}
+
+fn plan_object(source: &str) -> Object {
+    use bennett_circuits::object::{Symbol, derived_signature};
+    let mut object = Object::parse(source).unwrap();
+    if !object.symbols.is_empty() {
+        object.check().unwrap();
+        return object;
+    }
+    object.symbols = object
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(index, f)| Symbol {
+            index: index.to_string(),
+            name: f.name.clone(),
+            kind: f.kind.symbol_kind().into(),
+            signature: derived_signature(f).unwrap(),
+            stored_interface_hash: String::new(),
+        })
+        .collect();
+    let checked = object.materialize().unwrap();
+    checked.check().unwrap();
+    checked
+}
+
+#[test]
+fn analyzed_plan_call_sites_keep_monotonic_stack_and_saved_locations() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, Check, Event, analyze};
+    let object = plan_object(include_str!("fixtures/export_oracle/plan/calls.bennett"));
+    for (stack, depth, second) in [
+        (5, 1, None),
+        (6, 0, None),
+        (6, 1, Some(Check::Fault)),
+        (11, 1, Some(Check::Fault)),
+        (12, 1, Some(Check::Safe)),
+    ] {
+        let plan = analyze(
+            &object,
+            "calls",
+            budget(64, stack, depth),
+            &[],
+            &[],
+            AnalysisOrder::Forward,
+        )
+        .unwrap();
+        let entry = plan.node(0, &[]).unwrap();
+        let first = if stack < 6 || depth == 0 {
+            Check::Fault
+        } else {
+            Check::Safe
+        };
+        assert!(matches!(entry.event, Event::Call { cells: 6, check, .. } if check == first));
+        match second {
+            None => assert!(plan.node(1, &[]).is_none()),
+            Some(expected) => {
+                assert!(
+                    matches!(plan.node(1, &[]).unwrap().event, Event::Call { stack: s, depth: Some(0), check, .. } if s.min == 6 && s.max == 6 && check == expected)
+                );
+                let ret = plan.node(5, &[0]).unwrap();
+                assert_eq!(ret.successors[0].target.as_ref().unwrap().pc, 1);
+            }
+        }
+        if second == Some(Check::Safe) {
+            let one = plan
+                .locations()
+                .iter()
+                .position(|l| l.function == "inc" && l.name == "one")
+                .unwrap();
+            // Each fresh activation is zero even after a previous call used one=1.
+            assert_eq!(plan.node(3, &[1]).unwrap().values[one].as_u128(), Some(0));
+            assert_eq!(
+                plan.node(5, &[1]).unwrap().successors[0]
+                    .target
+                    .as_ref()
+                    .unwrap()
+                    .pc,
+                2
+            );
+        }
+    }
+}
+
+#[test]
+fn analyzed_plan_join_preserves_only_common_bits_and_canonical_labels() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    let object = plan_object(include_str!("fixtures/export_oracle/plan/diamond.bennett"));
+    let plan = analyze(
+        &object,
+        "diamond",
+        budget(12, 0, 0),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    let joined = plan.node(6, &[]).unwrap();
+    assert_eq!(joined.operands[1].0, [Some(true), None]);
+    assert_eq!(plan.node(8, &[]).unwrap().operands[0].as_u128(), Some(11));
+    assert_eq!(
+        plan.node(8, &[]).unwrap().successors[0]
+            .target
+            .as_ref()
+            .unwrap()
+            .pc,
+        11
+    );
+    assert!(plan.node(9, &[]).is_none());
+    for order in [
+        AnalysisOrder::FunctionsReversed,
+        AnalysisOrder::BlocksReversed,
+    ] {
+        let other = analyze(&object, "diamond", budget(12, 0, 0), &[], &[], order).unwrap();
+        assert_eq!(plan.nodes(), other.nodes());
+        assert_eq!(plan.layers(), other.layers());
+    }
+}
+
+#[test]
+fn analyzed_plan_recursion_uses_a_general_plan_without_losing_rows() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, Check, Event, analyze};
+    let object = plan_object(include_str!(
+        "fixtures/export_oracle/plan/recursive.bennett"
+    ));
+    let plan = analyze(
+        &object,
+        "recurse",
+        budget(u64::MAX, 16, 16),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    assert!(plan.is_general());
+    assert_eq!(plan.nodes().len(), plan.rows().len());
+    assert!(matches!(
+        plan.node(2, &[]).unwrap().event,
+        Event::Call {
+            check: Check::Dynamic,
+            depth: None,
+            ..
+        }
+    ));
+    assert_eq!(plan.layer(u64::MAX).len(), plan.rows().len() + 1);
+    assert_eq!(plan.layers().descriptor_count(), 2);
+    let mut nodes = plan.nodes().values();
+    let first = nodes.next().unwrap();
+    for node in nodes {
+        assert!(std::sync::Arc::ptr_eq(&first.values, &node.values));
+        assert!(std::sync::Arc::ptr_eq(&first.successors, &node.successors));
+    }
+    assert!(
+        plan.nodes()
+            .values()
+            .all(|n| n.general_kernel && n.source_charge == 1)
+    );
+}
+
+// Concrete original-row execution, independent of the abstract transfers. Checks
+// every reached row/context, all known bits and virtual capacity against the plan.
+fn check_collatz_trace(
+    plan: &bennett_circuits::oracle_plan::Plan,
+    object: &Object,
+    input: u128,
+) -> (u128, u8, u64) {
+    use bennett_circuits::oracle_plan::{Check, Event, RowKey};
+    let rows = [
+        object.function("ref").unwrap(),
+        object.function("L1").unwrap(),
+    ]
+    .into_iter()
+    .flat_map(|f| {
+        f.blocks
+            .iter()
+            .flat_map(move |b| b.instrs.iter().map(move |i| (f.name.as_str(), i)))
+    })
+    .collect::<Vec<_>>();
+    let mut values = plan
+        .locations()
+        .iter()
+        .map(|l| ((l.function.clone(), l.name.clone()), 0u128))
+        .collect::<BTreeMap<_, _>>();
+    *values.get_mut(&("ref".into(), "x0".into())).unwrap() = input;
+    let labels = object
+        .functions
+        .iter()
+        .flat_map(|f| {
+            f.blocks
+                .iter()
+                .map(move |b| (f.name.clone(), b.name.clone()))
+        })
+        .map(|(f, b)| {
+            let pc = plan
+                .rows()
+                .iter()
+                .find(|r| r.function == f && r.block == b)
+                .unwrap()
+                .pc;
+            ((f, b), pc)
+        })
+        .collect::<BTreeMap<_, _>>();
+    let (mut pc, mut stack) = (0, 0u64);
+    let mut calls = vec![];
+    let mut saved = None;
+    let b = plan.binding().budget;
+    for step in 0..b.steps {
+        let key = RowKey {
+            pc,
+            calls: calls.clone(),
+        };
+        assert!(plan.layer(step).contains(&key), "missing {key:?} at {step}");
+        let node = plan.node(pc, &calls).unwrap();
+        for (location, fact) in plan.locations().iter().zip(node.values.iter()) {
+            assert!(
+                fact.contains(values[&(location.function.clone(), location.name.clone())]),
+                "unsound {key:?} {location:?} input={input}"
+            );
+        }
+        let (f, i) = rows[pc];
+        let read = |operand: &Operand| match operand {
+            Operand::Name(n) => values[&(f.into(), n.clone())],
+            Operand::Int(s) => s.parse::<u128>().unwrap(),
+            _ => panic!("concrete test read {operand:?}"),
+        };
+        let label = |operand: &Operand| {
+            let Operand::Label(n, _) = operand else {
+                panic!("label")
+            };
+            labels[&(f.into(), n.clone())]
+        };
+        let op = i.opcode.strip_prefix("lift.").unwrap_or(&i.opcode);
+        let mut next = pc + 1;
+        let mut write = None;
+        match op {
+            "call" => {
+                let failed = stack + 28 > b.stack || calls.len() as u64 >= b.depth;
+                assert!(
+                    matches!(node.event, Event::Call { stack: s, check, .. } if s.min <= stack && stack <= s.max && (check != Check::Safe || !failed) && (check != Check::Fault || failed))
+                );
+                if failed {
+                    assert!(
+                        node.successors
+                            .iter()
+                            .any(|e| e.target.is_none() && e.fault == Some(Some(3)))
+                    );
+                    return (0, 3, step + 1);
+                }
+                let argument = values[&("ref".into(), "x0".into())];
+                saved = Some(values.clone());
+                for ((function, _), v) in &mut values {
+                    if function == "L1" {
+                        *v = 0;
+                    }
+                }
+                *values.get_mut(&("L1".into(), "a0".into())).unwrap() = argument;
+                stack += 28;
+                calls.push(pc);
+                next = 2;
+            }
+            "ret" => {
+                let value = read(&i.operands[0]);
+                let old = saved.take().unwrap();
+                for ((function, n), v) in &mut values {
+                    if function == "L1" {
+                        *v = old[&(function.clone(), n.clone())];
+                    }
+                }
+                *values.get_mut(&("ref".into(), "r".into())).unwrap() = value;
+                next = calls.pop().unwrap() + 1;
+            }
+            "retval" => {
+                assert!(
+                    node.successors
+                        .iter()
+                        .any(|e| e.target.is_none() && e.fault.is_none())
+                );
+                return (read(&i.operands[0]), 0, step + 1);
+            }
+            "qjump" => next = label(&i.operands[0]),
+            "qbranch" => {
+                next = label(&i.operands[if read(&i.operands[0]) & 1 != 0 { 1 } else { 2 }])
+            }
+            "parmov" => {
+                let Operand::List(names) = &i.operands[0] else {
+                    panic!("parmov")
+                };
+                let new = names
+                    .iter()
+                    .map(|n| values[&(f.into(), n.clone())])
+                    .collect::<Vec<_>>();
+                for (n, v) in i.lhs.iter().zip(new) {
+                    *values.get_mut(&(f.into(), n.clone())).unwrap() = v;
+                }
+            }
+            _ if op.starts_with("const.i") || op.starts_with("zext.i") => {
+                write = Some(read(&i.operands[0]))
+            }
+            "icmp.eq" => write = Some(u128::from(read(&i.operands[0]) == read(&i.operands[1]))),
+            "and" => write = Some(read(&i.operands[0]) & read(&i.operands[1])),
+            "add" => write = Some(read(&i.operands[0]).wrapping_add(read(&i.operands[1]))),
+            "mul" => write = Some(read(&i.operands[0]).wrapping_mul(read(&i.operands[1]))),
+            "lshr" => write = Some(read(&i.operands[0]) >> read(&i.operands[1])),
+            "select" => {
+                write = Some(read(
+                    &i.operands[if read(&i.operands[0]) & 1 != 0 { 1 } else { 2 }],
+                ))
+            }
+            _ => panic!("concrete Collatz test opcode {op}"),
+        }
+        if let Some(value) = write {
+            let n = &i.lhs[0];
+            let width = plan
+                .locations()
+                .iter()
+                .find(|l| l.function == f && l.name == *n)
+                .unwrap()
+                .width;
+            *values.get_mut(&(f.into(), n.clone())).unwrap() = value & ((1u128 << width) - 1);
+        }
+        let destination = RowKey {
+            pc: next,
+            calls: calls.clone(),
+        };
+        assert!(
+            node.successors
+                .iter()
+                .any(|e| e.target.as_ref() == Some(&destination)),
+            "missing edge {key:?} -> {destination:?}"
+        );
+        pc = next;
+    }
+    assert_eq!(plan.boundary_fault(&RowKey { pc, calls }), Some(1));
+    (0, 1, b.steps)
+}
+
+#[test]
+fn analyzed_plan_covers_all_collatz_inputs_at_original_budget_positions() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    let object = checked_collatz();
+    for steps in [0, 1, 2, 4, 8, 9, 10, 27, 28, 29, 45, 46, 47, 64, 2048] {
+        let plan = analyze(
+            &object,
+            "ref",
+            budget(steps, 32, 32),
+            &[],
+            &[],
+            AnalysisOrder::Forward,
+        )
+        .unwrap();
+        for input in 0..256 {
+            let result = check_collatz_trace(&plan, &object, input);
+            if input == 0 {
+                assert_eq!(result, (0, 1, steps));
+            }
+            for (x, first, payload) in [(1, 9, 0), (2, 28, 1), (4, 46, 2)] {
+                if input == x && steps >= first {
+                    assert_eq!(result, (payload, 0, first));
+                }
+            }
+        }
+    }
+    for (stack, depth) in CAPACITY_LIMITS {
+        for steps in CAPACITY_STEPS {
+            let plan = analyze(
+                &object,
+                "ref",
+                budget(steps, stack, depth),
+                &[],
+                &[],
+                AnalysisOrder::Forward,
+            )
+            .unwrap();
+            for input in [0, 1, 2, 255] {
+                check_collatz_trace(&plan, &object, input);
+            }
+        }
+    }
+}
+
+fn tiny_plan_program(regs: &str, body: &str, input: &str, arguments: &str) -> Object {
+    plan_object(&format!(
+        "bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32\n\nsection symbols\n{{}}\n\nsection functions\noracle @tiny ({input}) (t:wire[4]) (f:wire[4]) () ({arguments})\nregs {{ {regs} }}\n^entry():\n{body}\n"
+    ))
+}
+
+#[test]
+fn analyzed_plan_constant_and_partial_arithmetic_matches_all_small_inputs() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    for op in [
+        "add", "sub", "mul", "and", "or", "xor", "shl", "lshr", "ashr",
+    ] {
+        for constant in 0..=5u128 {
+            let object = tiny_plan_program(
+                "c:reg[4], r:reg[4]",
+                &format!("c = lift.const.i4 {constant}\nr = lift.{op} x c\nlift.retval r"),
+                "x:wire[4] in",
+                "",
+            );
+            let plan = analyze(
+                &object,
+                "tiny",
+                budget(3, 0, 0),
+                &[],
+                &[],
+                AnalysisOrder::Forward,
+            )
+            .unwrap();
+            for x in 0..16u128 {
+                let value = match op {
+                    "add" => x + constant,
+                    "sub" => x.wrapping_sub(constant),
+                    "mul" => x * constant,
+                    "and" => x & constant,
+                    "or" => x | constant,
+                    "xor" => x ^ constant,
+                    "shl" if constant < 4 => x << constant,
+                    "lshr" if constant < 4 => x >> constant,
+                    "ashr" if constant < 4 => ((((x as i8) << 4) >> 4) >> constant) as u128,
+                    _ => 0,
+                } & 15;
+                assert!(
+                    plan.node(2, &[]).unwrap().operands[0].contains(value),
+                    "{op} x={x} c={constant}"
+                );
+            }
+        }
+    }
+    for (op, expected) in [
+        ("mul", 9),
+        ("add", 6),
+        ("sub", 0),
+        ("ashr", 0),
+        ("lshr", 0),
+        ("shl", 8),
+    ] {
+        let object = tiny_plan_program(
+            "a:reg[4], r:reg[4]",
+            &format!("a = lift.const.i4 3\nr = lift.{op} a a\nlift.retval r"),
+            "",
+            "",
+        );
+        let plan = analyze(
+            &object,
+            "tiny",
+            budget(3, 0, 0),
+            &[],
+            &[],
+            AnalysisOrder::Forward,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.node(2, &[]).unwrap().operands[0].as_u128(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn analyzed_plan_preserves_first_fault_and_original_cutoffs() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    let object = tiny_plan_program(
+        "c:reg[4]",
+        "c = lift.const.i4 7\nlift.fault 3\n^dead():\nlift.fault 5\n^done():\nlift.retval c",
+        "",
+        "",
+    );
+    for steps in 0..=4 {
+        let plan = analyze(
+            &object,
+            "tiny",
+            budget(steps, 0, 0),
+            &[],
+            &[],
+            AnalysisOrder::Forward,
+        )
+        .unwrap();
+        assert_eq!(plan.node(0, &[]).unwrap().source_charge, 1);
+        assert!(plan.node(2, &[]).is_none());
+        assert_eq!(
+            plan.node(1, &[]).unwrap().successors[0].fault,
+            Some(Some(3))
+        );
+        for key in plan.layer(steps) {
+            assert_eq!(
+                plan.boundary_fault(key),
+                if steps < 2 { Some(1) } else { None }
+            );
+        }
+    }
+    let object = tiny_plan_program(
+        "c:reg[4], r:reg[4]",
+        "c = lift.const.i4 0\nr = lift.udiv x c\nlift.retval r",
+        "x:wire[4] in",
+        "",
+    );
+    let plan = analyze(
+        &object,
+        "tiny",
+        budget(4, 0, 0),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    assert_eq!(plan.node(1, &[]).unwrap().successors.len(), 1);
+    assert_eq!(
+        plan.node(1, &[]).unwrap().successors[0].fault,
+        Some(Some(5))
+    );
+    assert!(plan.node(2, &[]).is_none());
+}
+
+#[test]
+fn analyzed_plan_binding_captures_classical_args_controls_and_source_identity() {
+    use bennett_circuits::{
+        ir::Ctrl,
+        oracle::{Argument, Budget},
+        oracle_plan::{AnalysisOrder, analyze},
+    };
+    let object = tiny_plan_program(
+        "r:reg[4]",
+        "r = lift.trunc.i4 arg\nlift.retval r",
+        "",
+        "arg:i8",
+    );
+    let controls = [Ctrl {
+        qubit: QubitRef::new("outside", 7),
+        positive: false,
+    }];
+    let args = [Argument::Integer("23".into())];
+    let plan = analyze(
+        &object,
+        "tiny",
+        Budget {
+            steps: 2,
+            heap: 0,
+            stack: 0,
+            depth: 0,
+        },
+        &args,
+        &controls,
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    assert_eq!(plan.binding().arguments, args);
+    assert_eq!(plan.binding().inherited_controls, controls);
+    assert_eq!(
+        plan.binding().closure_hash,
+        object.check().unwrap().symbols["tiny"]
+            .closure_hash
+            .clone()
+            .unwrap()
+    );
+    assert_eq!(plan.node(1, &[]).unwrap().operands[0].as_u128(), Some(7));
+    assert!(
+        analyze(
+            &object,
+            "tiny",
+            budget(2, 0, 0),
+            &[],
+            &[],
+            AnalysisOrder::Forward
+        )
+        .is_err()
+    );
+    let other = analyze(
+        &object,
+        "tiny",
+        budget(2, 0, 0),
+        &[Argument::Integer("24".into())],
+        &controls,
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    assert_ne!(plan.binding(), other.binding());
+}
+
+#[test]
+fn analyzed_plan_reports_compact_work_without_claiming_emitted_gate_reduction() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    let object = checked_collatz();
+    let plan = analyze(
+        &object,
+        "ref",
+        budget(u64::MAX, 32, 32),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    let descriptors = plan.layers().descriptor_count();
+    assert!(descriptors < 256);
+    assert!(plan.analysis_visits < 4096);
+    for steps in [0, 1, 2, 4, 8, 9, 16, 32, 64, 2048, u64::MAX] {
+        let expanded = plan
+            .layers()
+            .expanded_row_contexts(steps, plan.rows().len());
+        assert!(expanded <= u128::from(steps) * 33);
+        eprintln!(
+            "B={steps} analyzed_row_contexts={expanded} resident_layer_descriptors={descriptors} analysis_visits={}",
+            plan.analysis_visits
+        );
+    }
+    let legacy_program = legacy(&object, budget(9, 32, 32));
+    assert_eq!(forward_counts(&legacy_program)[8], 238_029);
+    assert_eq!(legacy_program.top_circuit().unwrap().body.len(), 884_677);
+    eprintln!("legacy emitted gates unchanged: 238029/forward step, 476058/full marginal step");
+}
+
+#[test]
+fn analyzed_plan_small_calls_match_legacy_and_pinned_reference() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    let object = plan_object(include_str!("fixtures/export_oracle/plan/calls.bennett"));
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join(".tmp/oracle-plan-reference");
+    std::fs::create_dir_all(&dir).unwrap();
+    let fixture = dir.join("calls.bennett");
+    std::fs::write(&fixture, object.text()).unwrap();
+    let binary = sibling::isa().join("reference-interpreter/target/debug/bennett-isa-ref");
+    for stack in [5, 6, 11, 12] {
+        for depth in [0, 1] {
+            for steps in [0, 1, 4, 5, 8, 9] {
+                let b = budget(steps, stack, depth);
+                let plan = analyze(&object, "calls", b, &[], &[], AnalysisOrder::Forward).unwrap();
+                let literal =
+                    Permutation::from_literal(specialise_legacy(&object, "calls", b, &[]).unwrap());
+                literal.check_xor_outputs(0..6).unwrap();
+                let expected = |x: u64| {
+                    if steps == 0 {
+                        (0, 1, 0)
+                    } else if stack < 6 || depth == 0 {
+                        (0, 3, 1)
+                    } else if steps >= 5 && stack < 12 {
+                        (0, 3, 5)
+                    } else if steps >= 9 {
+                        ((x + 2) & 3, 0, 9)
+                    } else {
+                        (0, 1, steps)
+                    }
+                };
+                let tuples = (0..256u64)
+                    .map(|input| {
+                        let (payload, code, _) = expected(input >> 6);
+                        (
+                            input,
+                            (input & 3) ^ payload
+                                | ((((input >> 2) & 15) ^ code) << 2)
+                                | ((input >> 6) << 6),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert_tuples(&literal, &tuples);
+                for x in 0..4u64 {
+                    let out = Command::new(&binary)
+                        .args([
+                            "run-oracle",
+                            fixture.to_str().unwrap(),
+                            "calls",
+                            "--input",
+                            &x.to_string(),
+                            "--budget",
+                            &format!("{steps},0,{stack},{depth}"),
+                        ])
+                        .output()
+                        .unwrap();
+                    assert!(
+                        out.status.success(),
+                        "{}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                    let value = Value::parse(std::str::from_utf8(&out.stdout).unwrap()).unwrap();
+                    let (payload, code, executed) = expected(x);
+                    for (name, want) in [("payload", payload), ("code", code), ("steps", executed)]
+                    {
+                        assert_eq!(value.get(name).and_then(Value::as_u64), Some(want));
+                    }
+                    if code == 3 && executed == 1 {
+                        assert!(
+                            plan.node(0, &[])
+                                .unwrap()
+                                .successors
+                                .iter()
+                                .all(|e| e.target.is_none())
+                        );
+                    }
+                    if code == 3 && executed == 5 {
+                        assert!(
+                            plan.node(1, &[])
+                                .unwrap()
+                                .successors
+                                .iter()
+                                .all(|e| e.target.is_none())
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn analyzed_plan_counter_widening_and_unknown_indirect_edges_are_sound() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, Check, Event, analyze};
+    let source=include_str!("fixtures/export_oracle/plan/calls.bennett")
+        .replace("a:reg[2], b:reg[2], saved:reg[2]","a:reg[2], b:reg[2], saved:reg[2], p:reg[1]")
+        .replace("a = lift.call @inc (x)\nb = lift.call @inc (a)\nlift.retval b","p = lift.trunc.i1 x\nqjump ^loop\n^loop():\na = lift.call @inc (x)\nqbranch p ^loop ^done\n^done():\nlift.retval a")
+        .replace("\"S_cells\":4","\"S_cells\":5");
+    // This is a new source/layout variant, so derive its own identities rather
+    // than carrying the frozen fixture's interface hash across a layout change.
+    let (_, functions) = source.split_once("\n\nsection functions").unwrap();
+    let variant = format!(
+        "{}\n\nsection symbols\n{{}}\n\nsection functions{}",
+        source.lines().next().unwrap(),
+        functions
+    );
+    let object = plan_object(&variant);
+    let plan = analyze(
+        &object,
+        "calls",
+        budget(2048, 18, 1),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    assert!(
+        matches!(plan.node(2,&[]).unwrap().event, Event::Call { stack:s, depth:Some(0), check:Check::Dynamic,.. } if s.min==0 && s.max==18)
+    );
+    assert!(
+        plan.node(2, &[])
+            .unwrap()
+            .successors
+            .iter()
+            .any(|e| e.fault == Some(Some(3)))
+    );
+    for order in [
+        AnalysisOrder::FunctionsReversed,
+        AnalysisOrder::BlocksReversed,
+    ] {
+        let other = analyze(&object, "calls", budget(2048, 18, 1), &[], &[], order).unwrap();
+        assert_eq!(plan.nodes(), other.nodes());
+        assert_eq!(plan.layers(), other.layers());
+    }
+    let indirect = tiny_plan_program(
+        "c:reg[4]",
+        "qjumpr address\n^done():\nc = lift.const.i4 3\nlift.retval c",
+        "address:wire[32] in",
+        "",
+    );
+    let plan = analyze(
+        &indirect,
+        "tiny",
+        budget(4, 0, 0),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    assert_eq!(
+        plan.node(0, &[])
+            .unwrap()
+            .successors
+            .iter()
+            .filter(|e| e.target.is_some())
+            .count(),
+        3
+    );
+    assert!(
+        plan.node(0, &[])
+            .unwrap()
+            .successors
+            .iter()
+            .any(|e| e.fault == Some(Some(4)))
+    );
+}
+
+#[test]
+fn analyzed_plan_unproved_memory_uses_general_kernels_and_forgets_writes() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    let source = "bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32\n\nsection symbols\n{}\n\nsection functions\noracle @memory () (t:wire[8]) (f:wire[4]) () ()\nregs { p:reg[32], r:reg[8] }\n^entry():\np = lift.const.i32 0\nr = lift.load.i8 p\nlift.retval r\n\nsection layout\n{\"A_tab\":0,\"H\":12,\"S_cells\":0,\"globals\":{},\"heap_base\":4096,\"heap_limit_max\":0,\"interface_regions\":{\"memory\":{}},\"null_size\":4096,\"ptr_width\":32}\n";
+    let object = plan_object(source);
+    let plan = analyze(
+        &object,
+        "memory",
+        budget(3, 0, 0),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    assert!(plan.node(1, &[]).unwrap().general_kernel);
+    assert!(
+        plan.node(1, &[])
+            .unwrap()
+            .successors
+            .iter()
+            .any(|e| e.target.is_none())
+    );
+    assert!(
+        plan.node(2, &[]).unwrap().operands[0]
+            .0
+            .iter()
+            .all(Option::is_none)
+    );
+}
+
+#[test]
+fn analyzed_plan_signed_comparisons_casts_and_parallel_aliases_are_exact() {
+    use bennett_circuits::oracle_plan::{AnalysisOrder, analyze};
+    for (predicate, expected) in [
+        ("eq", 0),
+        ("ne", 1),
+        ("slt", 1),
+        ("sle", 1),
+        ("ult", 1),
+        ("ule", 1),
+    ] {
+        let object = tiny_plan_program(
+            "a:reg[4], b:reg[4], p:reg[1], r:reg[4]",
+            &format!(
+                "a = lift.const.i4 -8\nb = lift.const.i4 -1\np = lift.icmp.{predicate} a b\nr = lift.zext.i4 p\nlift.retval r"
+            ),
+            "",
+            "",
+        );
+        let plan = analyze(
+            &object,
+            "tiny",
+            budget(5, 0, 0),
+            &[],
+            &[],
+            AnalysisOrder::Forward,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.node(4, &[]).unwrap().operands[0].as_u128(),
+            Some(expected)
+        );
+    }
+    for (cast, expected) in [("sext", 255), ("zext", 15)] {
+        let object = tiny_plan_program(
+            "a:reg[4], b:reg[8], r:reg[4]",
+            &format!(
+                "a = lift.const.i4 -1\nb = lift.{cast}.i8 a\nr = lift.trunc.i4 b\nlift.retval r"
+            ),
+            "",
+            "",
+        );
+        let plan = analyze(
+            &object,
+            "tiny",
+            budget(4, 0, 0),
+            &[],
+            &[],
+            AnalysisOrder::Forward,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.node(2, &[]).unwrap().operands[0].as_u128(),
+            Some(expected)
+        );
+    }
+    let object = tiny_plan_program(
+        "a:reg[4], b:reg[4]",
+        "a = lift.const.i4 1\nb = lift.const.i4 2\n(a, b) = lift.parmov (b, a)\nlift.retval a",
+        "",
+        "",
+    );
+    let plan = analyze(
+        &object,
+        "tiny",
+        budget(4, 0, 0),
+        &[],
+        &[],
+        AnalysisOrder::Forward,
+    )
+    .unwrap();
+    let b = plan.locations().iter().position(|l| l.name == "b").unwrap();
+    assert_eq!(plan.node(3, &[]).unwrap().operands[0].as_u128(), Some(2));
+    assert_eq!(plan.node(3, &[]).unwrap().values[b].as_u128(), Some(1));
+}
