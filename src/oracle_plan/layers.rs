@@ -1,5 +1,9 @@
 use super::*;
 impl Layers {
+    pub(crate) fn descriptors(&self) -> (&[BTreeSet<RowKey>], &[BTreeSet<RowKey>]) {
+        (&self.prefix, &self.cycle)
+    }
+
     pub fn descriptor_count(&self) -> usize {
         self.prefix.len() + self.cycle.len()
     }

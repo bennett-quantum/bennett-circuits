@@ -179,7 +179,7 @@ src` (zero matches) and `git ls-files | rg
 job/shift/round labels and session dates. This is the repo's own baseline.
 
 <!-- quality-baseline -->
-New oracle analysis modules have measured structure entries; existing per-file limits are retained.
+Oracle analysis and replay modules have measured structure entries. The dispatch and source-validation additions are included in their owning modules' entries.
 
 ```json
 {
@@ -203,12 +203,19 @@ New oracle analysis modules have measured structure entries; existing per-file l
     "src/main.rs": 409,
     "src/metadata.rs": 478,
     "src/object.rs": 868,
-    "src/oracle.rs": 525,
+    "src/oracle.rs": 531,
+    "src/oracle_emit.rs": 2,
+    "src/oracle_emit/bits.rs": 80,
+    "src/oracle_emit/dispatch.rs": 0,
+    "src/oracle_emit/machine.rs": 61,
+    "src/oracle_emit/machine/rows.rs": 66,
+    "src/oracle_emit/replay.rs": 26,
+    "src/oracle_emit/source.rs": 36,
     "src/oracle_plan.rs": 4,
     "src/oracle_plan/flow.rs": 22,
     "src/oracle_plan/known.rs": 86,
     "src/oracle_plan/layers.rs": 11,
-    "src/oracle_plan/model.rs": 50,
+    "src/oracle_plan/model.rs": 55,
     "src/oracle_plan/transfer.rs": 44,
     "src/oracle_plan/transfer/effects.rs": 22,
     "src/placement.rs": 268,
@@ -224,9 +231,9 @@ New oracle analysis modules have measured structure entries; existing per-file l
     "src/translation.rs": 111
   },
   "length_distribution": {
-    "1-30": 457,
+    "1-30": 507,
     "101-300": 41,
-    "31-100": 142,
+    "31-100": 159,
     "over-300": 6
   },
   "longest_per_file": {
@@ -250,6 +257,13 @@ New oracle analysis modules have measured structure entries; existing per-file l
     "src/metadata.rs": 269,
     "src/object.rs": 139,
     "src/oracle.rs": 460,
+    "src/oracle_emit.rs": 24,
+    "src/oracle_emit/bits.rs": 29,
+    "src/oracle_emit/dispatch.rs": 5,
+    "src/oracle_emit/machine.rs": 44,
+    "src/oracle_emit/machine/rows.rs": 77,
+    "src/oracle_emit/replay.rs": 64,
+    "src/oracle_emit/source.rs": 42,
     "src/oracle_plan.rs": 36,
     "src/oracle_plan/flow.rs": 51,
     "src/oracle_plan/known.rs": 23,
@@ -273,7 +287,7 @@ New oracle analysis modules have measured structure entries; existing per-file l
   "tracked_litter": [
     ".beads/hooks/pre-push.backup"
   ],
-  "trivial_wrappers": 108
+  "trivial_wrappers": 113
 }
 ```
 

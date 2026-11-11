@@ -1,0 +1,25 @@
+bennett-object isa=0.8 object=0.8 launch=0.8 sched=0.8 cert=0.8 coverage=0.8 target=0.8 ptr_width=32
+
+section symbols
+{"0":{"interface_hash":"7725cb3fed3651924101bf8433f8e256a52c074a229b1bce29bf8ce669a27654","kind":"oracle","name":"nested","signature":{"abi":"0.8","args":[],"fault":4,"in":[2],"kind":"oracle","mem":[],"tgt":2,"tier":"q"}},"1":{"interface_hash":"79cbfd4b3eda03e35b2aadd84a30006c0dd301a95a89dcb6b9c9a6a7ca585ac2","kind":"lproc","name":"outer","signature":{"abi":"0.8","kind":"lproc","params":[2],"result":2,"tier":"q"}},"2":{"interface_hash":"2340eab0cceddb083368004f4627748831aa71c58e433de6bd58cb3616ae4908","kind":"lproc","name":"inc","signature":{"abi":"0.8","kind":"lproc","params":[2],"result":2,"tier":"q"}}}
+
+section functions
+oracle @nested (x:wire[2] in) (t:wire[2]) (f:wire[4]) () ()
+regs { a:reg[2] }
+^entry():
+a = lift.call @outer (x)
+lift.retval a
+lproc @outer (p:reg[2]) (r:reg[2]) () () ()
+regs { a:reg[2] }
+^entry():
+a = lift.call @inc (p)
+lift.ret a
+lproc @inc (p:reg[2]) (r:reg[2]) () () ()
+regs { one:reg[2] }
+^entry():
+one = lift.const.i2 1
+r = lift.add p one
+lift.ret r
+
+section layout
+{"A_tab":0,"H":12,"S_cells":4,"globals":{},"heap_base":4096,"heap_limit_max":0,"interface_regions":{"nested":{}},"null_size":4096,"ptr_width":32}
