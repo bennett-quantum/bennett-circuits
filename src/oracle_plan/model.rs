@@ -22,7 +22,9 @@ pub(super) struct Model {
 }
 impl Model {
     pub fn new(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -> Result<Self> {
-        obj.check()?;
+        // Source validation can replay certificates through the constructor.
+        // That replay stays literal instead of recursively re-entering analysis.
+        crate::oracle_emit::dispatch::literal(|| obj.check())?;
         let root = obj
             .function(name)
             .ok_or_else(|| Error(format!("plan: unknown @{name}")))?;

@@ -1187,9 +1187,11 @@ pub fn specialise(obj: &Object, name: &str, budget: Budget, args: &[Argument]) -
     if crate::oracle_emit::dispatch::active() {
         return specialise_legacy(obj, name, budget, args);
     }
-    match crate::oracle_emit::prepare(obj, name, budget, args)? {
-        Some(recipes) => recipes.to_program(),
-        None => specialise_legacy(obj, name, budget, args),
+    // Low-level callers can construct reference counterexamples from unchecked
+    // objects. Optimization validation must not narrow that literal API.
+    match crate::oracle_emit::prepare(obj, name, budget, args) {
+        Ok(Some(recipes)) => recipes.to_program(),
+        Ok(None) | Err(_) => specialise_legacy(obj, name, budget, args),
     }
 }
 /// Diagnostic execution includes one output bit per active forward row. These

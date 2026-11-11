@@ -179,7 +179,7 @@ src` (zero matches) and `git ls-files | rg
 job/shift/round labels and session dates. This is the repo's own baseline.
 
 <!-- quality-baseline -->
-Oracle analysis and replay modules have measured structure entries. The dispatch and memoryless-budget validation additions are included in their owning modules' entries.
+Oracle analysis and replay modules have measured structure entries. The dispatch and source-validation additions are included in their owning modules' entries.
 
 ```json
 {
@@ -215,7 +215,7 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
     "src/oracle_plan/flow.rs": 22,
     "src/oracle_plan/known.rs": 86,
     "src/oracle_plan/layers.rs": 11,
-    "src/oracle_plan/model.rs": 54,
+    "src/oracle_plan/model.rs": 55,
     "src/oracle_plan/transfer.rs": 44,
     "src/oracle_plan/transfer/effects.rs": 22,
     "src/placement.rs": 268,
@@ -231,9 +231,9 @@ Oracle analysis and replay modules have measured structure entries. The dispatch
     "src/translation.rs": 111
   },
   "length_distribution": {
-    "1-30": 508,
+    "1-30": 507,
     "101-300": 41,
-    "31-100": 158,
+    "31-100": 159,
     "over-300": 6
   },
   "longest_per_file": {
