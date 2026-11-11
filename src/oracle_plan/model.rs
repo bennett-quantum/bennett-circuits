@@ -16,6 +16,7 @@ pub(super) struct Model {
     pub locals: BTreeMap<String, Vec<usize>>,
     pub parameters: BTreeMap<String, Vec<usize>>,
     pub recursive: bool,
+    pub fault_width: usize,
     ids: BTreeMap<(String, String), usize>,
     labels: BTreeMap<(String, String), usize>,
     ptr_width: usize,
@@ -45,6 +46,7 @@ impl Model {
             ids: BTreeMap::new(),
             labels: BTreeMap::new(),
             ptr_width: obj.header.ptr_width as usize,
+            fault_width: root.groups[2][0].ty.wire_width().unwrap() as usize,
         };
         for function in &functions {
             model.index_function(function);
@@ -154,6 +156,14 @@ impl Model {
             .operands
             .iter()
             .flat_map(|op| match op {
+                Operand::Int(text)
+                    if matches!(
+                        r.public.opcode.as_str(),
+                        "fault" | "lift.fault" | "lift.faultif"
+                    ) =>
+                {
+                    vec![KnownBits::integer(text, self.fault_width)]
+                }
                 Operand::Name(_) | Operand::Int(_) => {
                     vec![self.read(&r.public.function, op, values)]
                 }

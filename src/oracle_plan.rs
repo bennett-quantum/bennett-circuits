@@ -95,7 +95,7 @@ pub enum Event {
 pub struct Edge {
     /// None is absorbing HALT. No subsequent row can override a first fault.
     pub target: Option<RowKey>,
-    /// Some(None) is an unknown general-kernel fault; None means no fault.
+    /// Some(None) is a fault without a small-byte code proof; None means no fault.
     pub fault: Option<Option<u8>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]

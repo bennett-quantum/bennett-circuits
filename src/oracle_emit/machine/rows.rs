@@ -191,9 +191,13 @@ impl Machine {
             unreachable!()
         };
         let code = KnownBits::integer(code, source.fault.len())
-            .as_u128()
-            .unwrap() as u8;
-        self.halt_with(code, &[at.clone(), bad.clone()], next, b);
+            .0
+            .into_iter()
+            .map(|bit| Bit::C(bit.expect("literal fault bit")))
+            .collect::<Word>();
+        let controls = [at.clone(), bad.clone()];
+        b.copy(&code, &self.code, &controls);
+        b.copy(&constant(self.halt as u128, next.len()), next, &controls);
         if bad != Bit::C(true) {
             self.go(
                 RowKey {

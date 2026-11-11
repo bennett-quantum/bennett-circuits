@@ -2399,3 +2399,56 @@ fn engineered_unreachable_lprocs_do_not_enter_the_selected_closure() {
     );
     assert_small_recipes(&object, "small", budget(1, 0, 0), |x| (x, 0));
 }
+
+#[test]
+fn engineered_wide_fault_literals_preserve_high_bits_and_nonzero_outputs() {
+    use bennett_circuits::oracle_emit::prepare;
+    let object = Object::parse(
+        &std::fs::read_to_string(
+            sibling::isa().join("reference-interpreter/tests/fixtures/wide.bisa"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    for name in ["fault257", "fault_small257"] {
+        for steps in [0, 1, 2] {
+            let recipes = prepare(&object, name, budget(steps, 0, 0), &[])
+                .unwrap()
+                .unwrap();
+            let node = recipes.plan().node(0, &[]).unwrap();
+            assert_eq!(node.operands[0].0.len(), 257);
+            assert_eq!(node.operands[0].0[200], Some(true));
+            assert!(node.successors.iter().any(|edge| edge.fault == Some(None)));
+            for seed in 0..6usize {
+                let mut state = vec![false; recipes.wire_count().unwrap()];
+                for (wire, bit) in state.iter_mut().take(recipes.interface_wires()).enumerate() {
+                    *bit = (wire + seed) % 3 == 0;
+                }
+                let initial = state.clone();
+                let mut expected = initial.clone();
+                for bit in if steps == 0 { vec![0] } else { vec![0, 1, 200] } {
+                    expected[257 + bit] ^= true;
+                }
+                for repeat in 0..2 {
+                    recipes
+                        .visit(|gate| {
+                            if gate.controls.iter().all(|(q, p)| state[*q] == *p) {
+                                state[gate.target] ^= true;
+                            }
+                            Ok(())
+                        })
+                        .unwrap();
+                    assert_eq!(
+                        state,
+                        if repeat == 0 {
+                            expected.clone()
+                        } else {
+                            initial.clone()
+                        },
+                        "@{name} B={steps} seed={seed}"
+                    );
+                }
+            }
+        }
+    }
+}
