@@ -1,7 +1,7 @@
 use super::*;
 use crate::oracle_plan::{Check, Event, Node as PlannedNode};
 use source::{Instruction, Read, Source};
-mod rows;
+pub(super) mod rows;
 pub(super) struct Machine {
     pub banks: BTreeMap<(Vec<usize>, usize), Vec<Option<usize>>>,
     pub tags: BTreeMap<RowKey, usize>,
