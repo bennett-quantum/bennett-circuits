@@ -150,3 +150,52 @@ checks explicitly enabled. This keeps the existing multi-million-gate oracle
 checks practical without reducing their domains or checks. The initial
 unoptimised full run exceeded its 900-second bound; final results are recorded
 in the job Resume block and Beads closure reasons.
+
+
+## Acceptance commands and gate ownership
+
+The normal `gate.toml` cargo-test check discovers the existing `integration`
+target without a filter. Its non-ignored `export_oracle::` module owns the
+compiled-oracle acceptance: checked fixture/legacy baseline, constants and
+context reachability, virtual budget/fault boundaries, complete private cleanup
+and involution, logical size limits, resident representation and streamed CLI
+agreement with the gate-pinned ISA. `qasm::` and `exporters::` add transport-error,
+allocation-error, metadata-tamper and independent grammar checks. A runtime
+harness-discovery test verifies that these named acceptance cases are present
+and not ignored. No second full gate or exporter-only gate check is added.
+
+```sh
+cargo test --offline --test integration export_oracle:: -- --test-threads=1
+scripts/run-conformance
+```
+
+`run-conformance` compiles and invokes the pinned published harness unchanged,
+with its original cases, `--suite F`, binary and forwarded arguments. It then
+runs the named local exporter module separately, including when F fails. The
+published harness stdout and verdict are retained. Local diagnostics and its
+PASS/FAIL/UNKNOWN label go to stderr. A failed published F keeps its original
+exit priority; otherwise a local failure makes the combined command fail.
+Thus neither a passing source checker nor a passing exporter can hide the other
+failure. The local tests are consumer evidence, not new spec-owned F vectors.
+
+Local command hang guards are distinct from acceptance budgets. The exporter
+module has a 1200-second guard (`BENNETT_EXPORTER_GUARD_S` for an admitted host
+profile); a timeout or interruption is UNKNOWN and exits nonzero. Gate-run
+commands retain the repository's configured 7200-second guard and admission
+policy. These protect a host from a hang; they never change original source-row
+charges, gate ceilings or the oracle input domain. Keep resource admission and
+host-quiet holds outside the conformance command. Stage 6's loop target remains
+separate acceptance; passing the step exporter does not claim the loop target.
+
+
+| Verification class | Existing command owner | Work acceptance | Hang protection |
+|---|---|---|---|
+| Normal exporter acceptance | `integration` target in the normal cargo-test check | Named non-ignored semantics, size, representation, transport and external grammar cases above | Gate command guard: 7200 s |
+| Serial local export differential | `run-conformance` after unchanged published F | `export_oracle::` module, exact reference agreement and original budget boundaries | 1200 s; override only for an admitted host profile; timeout/signal is UNKNOWN |
+| General oracle differential | Existing post-merge `oracles` check | Published oracle corpus, cleanup, reversal and CLI agreement | Gate command guard: 7200 s; approximately 7 GiB admission class |
+
+The serial profile uses three offline build workers and one test thread; the
+normal gate uses three build workers and four test threads. Test optimization,
+assertions and overflow checks are unchanged. These rows assign protection to
+the commands that already own the work, rather than adding an independent gate
+or replacing any published conformance requirement.

@@ -9,6 +9,7 @@ mod diagnostics;
 mod differential;
 #[path = "support/exact.rs"]
 mod exact;
+// Named local exporter acceptance; run-conformance also executes this module.
 #[path = "export_oracle.rs"]
 mod export_oracle;
 #[path = "exporters.rs"]
